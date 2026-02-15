@@ -328,6 +328,15 @@ export async function updateStudentPhone(leadId, phone) {
   return !error
 }
 
+export async function updateStudentEmail(leadId, email) {
+  const { error } = await supabase
+    .from('students')
+    .update({ email })
+    .eq('lead_id', leadId)
+  if (error) console.error('Update student email error:', error)
+  return !error
+}
+
 export async function sendOtp(phone) {
   try {
     const res = await fetch('/api/send-otp', {

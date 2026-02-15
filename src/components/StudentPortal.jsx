@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight } from 'lucide-react'
-import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, sendOtp, verifyOtp } from '../lib/db'
+import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, updateStudentEmail, sendOtp, verifyOtp } from '../lib/db'
 import { cleanPlatformUsername, fetchGitHubData, fetchGitHubContributions } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { StudentProjectDashboard } from './ProjectHub'
@@ -146,6 +146,8 @@ function AuthScreen({ onSuccess }) {
   const [loading, setLoading] = useState(false)
   const [resendTimer, setResendTimer] = useState(0)
   const [email, setEmail] = useState('')
+  const [leadId, setLeadId] = useState('')
+  const [signupMethod, setSignupMethod] = useState('email') // 'email' or 'leadid'
   const [foundStudent, setFoundStudent] = useState(null)
   const timerRef = useRef(null)
 
@@ -167,6 +169,8 @@ function AuthScreen({ onSuccess }) {
     setOtp('')
     setPhone('')
     setEmail('')
+    setLeadId('')
+    setSignupMethod('email')
     setFoundStudent(null)
   }
 
@@ -178,6 +182,24 @@ function AuthScreen({ onSuccess }) {
     const student = await getStudentByEmail(email.trim().toLowerCase())
     if (!student) {
       setError('No student found with this email. Please check and try again.')
+      setLoading(false); return
+    }
+    if (student.phone) {
+      setError('This account already has a phone number linked. Please use Login instead.')
+      setLoading(false); return
+    }
+    setFoundStudent(student)
+    setStep(2)
+    setLoading(false)
+  }
+
+  const handleLeadIdCheck = async (e) => {
+    e.preventDefault()
+    if (!leadId.trim()) return
+    setLoading(true); setError('')
+    const student = await getStudent(leadId.trim())
+    if (!student) {
+      setError('No student found with this Lead ID. Please check and try again.')
       setLoading(false); return
     }
     if (student.phone) {
@@ -225,6 +247,9 @@ function AuthScreen({ onSuccess }) {
       setLoading(false); return
     }
     await updateStudentPhone(foundStudent.lead_id, phone)
+    if (signupMethod === 'leadid' && !foundStudent.email && email.trim()) {
+      await updateStudentEmail(foundStudent.lead_id, email.trim().toLowerCase())
+    }
     const updated = await getStudent(foundStudent.lead_id)
     onSuccess(updated)
     setLoading(false)
@@ -309,20 +334,50 @@ function AuthScreen({ onSuccess }) {
 
           {/* ---- SIGNUP FLOW ---- */}
           {mode === 'signup' && step === 1 && (
-            <form onSubmit={handleEmailCheck} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
-                  <Mail size={14} /> Enter your registered email
-                </label>
-                <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
-                  placeholder="your.email@example.com" autoFocus
-                  className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
+            <div className="space-y-4">
+              <div className="flex bg-primary/5 rounded-lg p-0.5 text-xs">
+                <button type="button" onClick={() => { setSignupMethod('email'); setError('') }}
+                  className={`flex-1 py-2 rounded-md font-semibold transition-colors ${signupMethod === 'email' ? 'bg-ambient text-white' : 'text-primary/50 hover:text-primary'}`}>
+                  Email
+                </button>
+                <button type="button" onClick={() => { setSignupMethod('leadid'); setError('') }}
+                  className={`flex-1 py-2 rounded-md font-semibold transition-colors ${signupMethod === 'leadid' ? 'bg-ambient text-white' : 'text-primary/50 hover:text-primary'}`}>
+                  Lead ID
+                </button>
               </div>
-              <button type="submit" disabled={loading || !email.trim()}
-                className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
-                {loading ? <Spinner /> : <>Continue <ArrowRight size={18} /></>}
-              </button>
-            </form>
+
+              {signupMethod === 'email' ? (
+                <form onSubmit={handleEmailCheck} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                      <Mail size={14} /> Enter your registered email
+                    </label>
+                    <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
+                      placeholder="your.email@example.com" autoFocus
+                      className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
+                  </div>
+                  <button type="submit" disabled={loading || !email.trim()}
+                    className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                    {loading ? <Spinner /> : <>Continue <ArrowRight size={18} /></>}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleLeadIdCheck} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                      <Shield size={14} /> Enter your Lead ID
+                    </label>
+                    <input type="text" value={leadId} onChange={e => { setLeadId(e.target.value); setError('') }}
+                      placeholder="e.g. ALTA-12345" autoFocus
+                      className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
+                  </div>
+                  <button type="submit" disabled={loading || !leadId.trim()}
+                    className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                    {loading ? <Spinner /> : <>Continue <ArrowRight size={18} /></>}
+                  </button>
+                </form>
+              )}
+            </div>
           )}
 
           {mode === 'signup' && step === 2 && (
@@ -336,6 +391,16 @@ function AuthScreen({ onSuccess }) {
                 {foundStudent.college && <p className="text-sm text-primary/50 mt-1">{foundStudent.college}</p>}
               </div>
               <form onSubmit={handleSignupSendOtp} className="space-y-4">
+                {signupMethod === 'leadid' && !foundStudent.email && (
+                  <div>
+                    <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                      <Mail size={14} /> Enter your email
+                    </label>
+                    <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
+                      placeholder="your.email@example.com"
+                      className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
                     <Phone size={14} /> Enter your WhatsApp number
@@ -348,7 +413,7 @@ function AuthScreen({ onSuccess }) {
                   </div>
                   <p className="text-xs text-primary/40 mt-1.5">Must be a WhatsApp-enabled number. OTP will be sent via WhatsApp.</p>
                 </div>
-                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10}
+                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10 || (signupMethod === 'leadid' && !foundStudent.email && !email.trim())}
                   className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
                   {loading ? <Spinner /> : <>Send OTP <ArrowRight size={18} /></>}
                 </button>
