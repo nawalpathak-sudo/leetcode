@@ -4,9 +4,16 @@
 
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = 'https://ifkkhwumimawacqaujop.supabase.co'
-const SERVICE_KEY = process.argv[2] || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDg5MTc1OSwiZXhwIjoyMDg2NDY3NzU5fQ.BB3cqEO73Oot2ovkPRZ8l3eTxnq7ltJB1PtMmbh98RQ'
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4OTE3NTksImV4cCI6MjA4NjQ2Nzc1OX0.rmPKoWFi1iJLHyb1ozHgqI75t51alDwTqZZGcnBZu1I'
+import 'dotenv/config'
+
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
+const SERVICE_KEY = process.argv[2] || process.env.SUPABASE_SERVICE_ROLE_KEY
+const ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+
+if (!SUPABASE_URL || !SERVICE_KEY) {
+  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars')
+  process.exit(1)
+}
 
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY)
 
