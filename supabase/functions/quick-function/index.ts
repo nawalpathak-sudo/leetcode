@@ -1,0 +1,202 @@
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
+
+const LEETCODE_GRAPHQL_URL = 'https://leetcode.com/graphql'
+
+// Fetch problem details by titleSlug
+const PROBLEM_QUERY = `
+query questionData($titleSlug: String!) {
+  question(titleSlug: $titleSlug) {
+    questionId
+    questionFrontendId
+    title
+    titleSlug
+    difficulty
+    acRate
+    stats
+    likes
+    dislikes
+    topicTags {
+      name
+    }
+    hints
+    similarQuestions
+  }
+}
+`
+
+// Matches the exact Python query from leetcode.py
+const LEETCODE_QUERY = `
+query getUserProfile($username: String!) {
+  matchedUser(username: $username) {
+    username
+    profile {
+      ranking
+      reputation
+      starRating
+      realName
+      aboutMe
+      userAvatar
+      skillTags
+      countryName
+    }
+    submitStats {
+      acSubmissionNum {
+        difficulty
+        count
+        submissions
+      }
+      totalSubmissionNum {
+        difficulty
+        count
+        submissions
+      }
+    }
+    submissionCalendar
+    badges {
+      id
+      displayName
+      icon
+      creationDate
+    }
+    upcomingBadges {
+      name
+      icon
+    }
+  }
+  userContestRanking(username: $username) {
+    attendedContestsCount
+    rating
+    globalRanking
+    totalParticipants
+    topPercentage
+  }
+  userContestRankingHistory(username: $username) {
+    attended
+    rating
+    ranking
+    contest {
+      title
+      startTime
+    }
+  }
+  recentSubmissionList(username: $username, limit: 20) {
+    title
+    titleSlug
+    timestamp
+    statusDisplay
+    lang
+  }
+  recentAcSubmissionList(username: $username, limit: 100) {
+    titleSlug
+    timestamp
+  }
+  matchedUserStats: matchedUser(username: $username) {
+    submitStatsGlobal {
+      acSubmissionNum {
+        difficulty
+        count
+      }
+    }
+  }
+}
+`
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, options)
+      if (res.ok || i === retries - 1) return res
+      if ([429, 500, 502, 503, 504].includes(res.status)) {
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)))
+        continue
+      }
+      return res
+    } catch (err) {
+      if (i === retries - 1) throw err
+      await new Promise(r => setTimeout(r, 2000 * (i + 1)))
+    }
+  }
+  throw new Error('Max retries reached')
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  try {
+    const body = await req.json()
+    const { username, titleSlug, githubUsername } = body
+
+    // GitHub contributions endpoint
+    if (githubUsername) {
+      const res = await fetchWithRetry(
+        `https://github.com/users/${encodeURIComponent(githubUsername)}/contributions`,
+        {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html',
+          },
+        }
+      )
+      const html = await res.text()
+      const contributions: Record<string, number> = {}
+
+      // Extract data-date and data-level from each calendar cell
+      // Then look ahead for the exact count in the tooltip/span text
+      const cellRegex = /data-date="(\d{4}-\d{2}-\d{2})"[^>]*data-level="(\d)"/g
+      let match
+      while ((match = cellRegex.exec(html)) !== null) {
+        const date = match[1]
+        const level = parseInt(match[2])
+        if (level === 0) { contributions[date] = 0; continue }
+
+        // Look ahead up to 500 chars for the exact count in tooltip text
+        const ahead = html.substring(match.index, match.index + 500)
+        const countMatch = ahead.match(/(\d+)\s+contributions?/)
+        contributions[date] = countMatch ? parseInt(countMatch[1]) : level
+      }
+
+      return new Response(JSON.stringify({ contributions }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (!username && !titleSlug) {
+      return new Response(JSON.stringify({ error: 'username, titleSlug, or githubUsername required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    const query = titleSlug ? PROBLEM_QUERY : LEETCODE_QUERY
+    const variables = titleSlug ? { titleSlug } : { username }
+
+    const response = await fetchWithRetry(LEETCODE_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://leetcode.com',
+        'Origin': 'https://leetcode.com',
+      },
+      body: JSON.stringify({ query, variables }),
+    })
+
+    const data = await response.json()
+
+    return new Response(JSON.stringify(data), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+})
