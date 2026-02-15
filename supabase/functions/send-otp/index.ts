@@ -6,8 +6,32 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const MAX_OTP_PER_PHONE = 3
+const MAX_OTP_PER_IP = 10
+const RATE_WINDOW_MINUTES = 10
+const COOLDOWN_SECONDS = 30
+
 function generateOTP(): string {
   return String(Math.floor(100000 + Math.random() * 900000))
+}
+
+function isValidPhone(phone: string): boolean {
+  return /^91\d{10}$/.test(phone)
+}
+
+function getClientIp(req: Request): string {
+  return (
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') ||
+    'unknown'
+  )
+}
+
+function jsonResponse(body: object, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
 }
 
 serve(async (req) => {
@@ -19,28 +43,81 @@ serve(async (req) => {
     const { phone } = await req.json()
 
     if (!phone) {
-      return new Response(JSON.stringify({ error: 'phone is required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ error: 'phone is required' }, 400)
     }
 
-    const otp = generateOTP()
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString() // 5 min expiry
+    if (!isValidPhone(phone)) {
+      return jsonResponse({ error: 'Invalid phone format. Expected 91 followed by 10 digits.' }, 400)
+    }
 
-    // Store OTP in Supabase
+    const clientIp = getClientIp(req)
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
+    const windowStart = new Date(Date.now() - RATE_WINDOW_MINUTES * 60 * 1000).toISOString()
+
+    // Check per-phone rate limit
+    const { count: phoneCount } = await supabase
+      .from('otp_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('phone', phone)
+      .gte('created_at', windowStart)
+
+    if ((phoneCount ?? 0) >= MAX_OTP_PER_PHONE) {
+      return jsonResponse({
+        error: `Too many OTP requests. Try again after ${RATE_WINDOW_MINUTES} minutes.`,
+      }, 429)
+    }
+
+    // Check per-IP rate limit
+    const { count: ipCount } = await supabase
+      .from('otp_rate_limits')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_address', clientIp)
+      .gte('created_at', windowStart)
+
+    if ((ipCount ?? 0) >= MAX_OTP_PER_IP) {
+      return jsonResponse({
+        error: 'Too many OTP requests from this network. Try again later.',
+      }, 429)
+    }
+
+    // Check cooldown: last OTP for this phone must be > 30s ago
+    const { data: lastOtp } = await supabase
+      .from('otp_codes')
+      .select('created_at')
+      .eq('phone', phone)
+      .single()
+
+    if (lastOtp) {
+      const elapsed = (Date.now() - new Date(lastOtp.created_at).getTime()) / 1000
+      if (elapsed < COOLDOWN_SECONDS) {
+        const wait = Math.ceil(COOLDOWN_SECONDS - elapsed)
+        return jsonResponse({
+          error: `Please wait ${wait} seconds before requesting another OTP.`,
+        }, 429)
+      }
+    }
+
+    // All checks passed — generate and send OTP
+    const otp = generateOTP()
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+
     const { error: dbError } = await supabase
       .from('otp_codes')
       .upsert(
-        { phone, code: otp, expires_at: expiresAt, verified: false },
+        { phone, code: otp, expires_at: expiresAt, verified: false, attempts: 0, created_at: new Date().toISOString() },
         { onConflict: 'phone' },
       )
 
     if (dbError) throw new Error(`DB error: ${dbError.message}`)
+
+    // Log this request for rate limiting
+    await supabase
+      .from('otp_rate_limits')
+      .insert({ phone, ip_address: clientIp })
 
     // Send OTP via TrustSignal WhatsApp API
     const apiKey = Deno.env.get('TRUSTSIGNAL_API_KEY')!
@@ -66,17 +143,8 @@ serve(async (req) => {
       throw new Error(`TrustSignal error: ${JSON.stringify(result)}`)
     }
 
-    return new Response(
-      JSON.stringify({ success: true, message: 'OTP sent' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    return jsonResponse({ success: true, message: 'OTP sent' })
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
-    )
+    return jsonResponse({ error: (err as Error).message }, 500)
   }
 })

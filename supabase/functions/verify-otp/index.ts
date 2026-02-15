@@ -6,6 +6,15 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const MAX_VERIFY_ATTEMPTS = 5
+
+function jsonResponse(body: object, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -15,49 +24,61 @@ serve(async (req) => {
     const { phone, code } = await req.json()
 
     if (!phone || !code) {
-      return new Response(JSON.stringify({ error: 'phone and code are required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      return jsonResponse({ error: 'phone and code are required' }, 400)
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    const { data, error } = await supabase
+    // Fetch the OTP record for this phone (unverified + not expired)
+    const { data: otpRecord, error: fetchError } = await supabase
       .from('otp_codes')
       .select('*')
       .eq('phone', phone)
-      .eq('code', code)
       .eq('verified', false)
       .gt('expires_at', new Date().toISOString())
       .single()
 
-    if (error || !data) {
-      return new Response(
-        JSON.stringify({ success: false, error: 'Invalid or expired OTP' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
+    if (fetchError || !otpRecord) {
+      return jsonResponse({ success: false, error: 'Invalid or expired OTP' }, 401)
     }
 
-    // Mark as verified
+    // Check if max attempts exceeded
+    if ((otpRecord.attempts || 0) >= MAX_VERIFY_ATTEMPTS) {
+      await supabase
+        .from('otp_codes')
+        .delete()
+        .eq('phone', phone)
+
+      return jsonResponse({
+        success: false,
+        error: 'Too many failed attempts. Please request a new OTP.',
+      }, 429)
+    }
+
+    // Wrong code — increment attempts
+    if (otpRecord.code !== code) {
+      await supabase
+        .from('otp_codes')
+        .update({ attempts: (otpRecord.attempts || 0) + 1 })
+        .eq('phone', phone)
+
+      const remaining = MAX_VERIFY_ATTEMPTS - (otpRecord.attempts || 0) - 1
+      return jsonResponse({
+        success: false,
+        error: `Invalid OTP. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
+      }, 401)
+    }
+
+    // Correct code — mark verified
     await supabase
       .from('otp_codes')
       .update({ verified: true })
       .eq('phone', phone)
 
-    return new Response(
-      JSON.stringify({ success: true, message: 'OTP verified' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    )
+    return jsonResponse({ success: true, message: 'OTP verified' })
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      },
-    )
+    return jsonResponse({ error: (err as Error).message }, 500)
   }
 })

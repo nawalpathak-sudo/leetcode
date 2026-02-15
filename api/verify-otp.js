@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
+const MAX_VERIFY_ATTEMPTS = 5
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*')
@@ -24,19 +26,48 @@ export default async function handler(req, res) {
       process.env.SUPABASE_SERVICE_ROLE_KEY,
     )
 
-    const { data, error } = await supabase
+    // Fetch the OTP record for this phone (unverified + not expired)
+    const { data: otpRecord, error: fetchError } = await supabase
       .from('otp_codes')
       .select('*')
       .eq('phone', phone)
-      .eq('code', code)
       .eq('verified', false)
       .gt('expires_at', new Date().toISOString())
       .single()
 
-    if (error || !data) {
+    if (fetchError || !otpRecord) {
       return res.status(401).json({ success: false, error: 'Invalid or expired OTP' })
     }
 
+    // Check if max attempts exceeded
+    if ((otpRecord.attempts || 0) >= MAX_VERIFY_ATTEMPTS) {
+      // Invalidate the OTP entirely
+      await supabase
+        .from('otp_codes')
+        .delete()
+        .eq('phone', phone)
+
+      return res.status(429).json({
+        success: false,
+        error: 'Too many failed attempts. Please request a new OTP.',
+      })
+    }
+
+    // Wrong code — increment attempts
+    if (otpRecord.code !== code) {
+      await supabase
+        .from('otp_codes')
+        .update({ attempts: (otpRecord.attempts || 0) + 1 })
+        .eq('phone', phone)
+
+      const remaining = MAX_VERIFY_ATTEMPTS - (otpRecord.attempts || 0) - 1
+      return res.status(401).json({
+        success: false,
+        error: `Invalid OTP. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
+      })
+    }
+
+    // Correct code — mark verified
     await supabase
       .from('otp_codes')
       .update({ verified: true })
