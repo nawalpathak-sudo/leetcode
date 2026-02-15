@@ -10,6 +10,7 @@ import PracticeAdmin from './components/PracticeAdmin'
 import PracticePage from './components/PracticePage'
 import ProjectHub from './components/ProjectHub'
 import { loadPlatforms } from './lib/db'
+import { AuthProvider } from './context/AuthContext'
 
 const DEFAULT_PLATFORMS = [
   { slug: 'leetcode', display_name: 'LeetCode', base_url: 'https://leetcode.com', active: true },
@@ -146,14 +147,16 @@ function AdminApp() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/portal" element={<StudentPortal />} />
-      <Route path="/admin" element={<AdminApp />} />
-      <Route path="/practice" element={<PracticePage />} />
-      <Route path="/projects" element={<ProjectHub />} />
-      <Route path="/:slug" element={<PublicProfile />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AuthProvider>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/portal" element={<StudentPortal />} />
+        <Route path="/admin" element={<AdminApp />} />
+        <Route path="/practice" element={<PracticePage />} />
+        <Route path="/projects" element={<ProjectHub />} />
+        <Route path="/:slug" element={<PublicProfile />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   )
 }

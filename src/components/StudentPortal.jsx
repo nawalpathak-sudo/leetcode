@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
-import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2 } from 'lucide-react'
-import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile } from '../lib/db'
+import { useState, useEffect, useRef } from 'react'
+import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight } from 'lucide-react'
+import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, sendOtp, verifyOtp } from '../lib/db'
 import { cleanPlatformUsername, fetchGitHubData, fetchGitHubContributions } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import { StudentProjectDashboard } from './ProjectHub'
 import { ActivityStrip } from './StudentView'
 import { computeRecentActivity } from '../lib/activity'
@@ -21,11 +22,20 @@ export const PLATFORMS = [
 export const SCORED_PLATFORMS = ['leetcode', 'codeforces']
 
 export default function StudentPortal() {
-  const [screen, setScreen] = useState('login') // login | dashboard | edit | projects
+  const { student: authStudent, loading: authLoading, login, logout } = useAuth()
+  const [screen, setScreen] = useState('auth')
   const [student, setStudent] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [benchmarks, setBenchmarks] = useState({})
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (authStudent && screen === 'auth') {
+      loadDashboard(authStudent.lead_id).then(s => {
+        if (s) setScreen('dashboard')
+      })
+    }
+  }, [authStudent])
 
   const loadDashboard = async (leadId) => {
     setLoading(true)
@@ -35,7 +45,6 @@ export default function StudentPortal() {
 
     const profs = await getStudentProfiles(leadId)
 
-    // Backfill GitHub contributions for existing profiles that don't have it
     const ghProf = profs.find(p => p.platform === 'github')
     if (ghProf?.username && ghProf.raw_json && !ghProf.raw_json.contributions) {
       const contributions = await fetchGitHubContributions(ghProf.username)
@@ -47,7 +56,6 @@ export default function StudentPortal() {
 
     setProfiles(profs)
 
-    // Load benchmarks for scored platforms
     const bm = {}
     for (const plat of SCORED_PLATFORMS) {
       const all = await loadAllProfiles(plat)
@@ -73,17 +81,18 @@ export default function StudentPortal() {
     return s
   }
 
-  const handleLogin = async (leadId) => {
-    const s = await loadDashboard(leadId)
-    if (s) setScreen('dashboard')
-    return !!s
+  const handleAuthSuccess = async (studentData) => {
+    login(studentData)
+    await loadDashboard(studentData.lead_id)
+    setScreen('dashboard')
   }
 
   const handleLogout = () => {
+    logout()
     setStudent(null)
     setProfiles([])
     setBenchmarks({})
-    setScreen('login')
+    setScreen('auth')
   }
 
   const handleSaveEdit = async () => {
@@ -91,8 +100,8 @@ export default function StudentPortal() {
     setScreen('dashboard')
   }
 
-  if (screen === 'login') return <LoginScreen onLogin={handleLogin} />
-  if (loading) return <FullSpinner />
+  if (authLoading || loading) return <FullSpinner />
+  if (screen === 'auth' && !authStudent) return <AuthScreen onSuccess={handleAuthSuccess} />
   if (screen === 'edit') return <EditScreen student={student} profiles={profiles} onSave={handleSaveEdit} onCancel={() => setScreen('dashboard')} />
   if (screen === 'projects') return (
     <div className="min-h-screen bg-gray-50">
@@ -119,23 +128,162 @@ export default function StudentPortal() {
 }
 
 // ============================================================
-// LOGIN
+// AUTH (Login / Signup with WhatsApp OTP)
 // ============================================================
 
-function LoginScreen({ onLogin }) {
-  const [leadId, setLeadId] = useState('')
+function formatPhone(raw) {
+  let cleaned = raw.replace(/\D/g, '')
+  if (cleaned.length === 10) cleaned = '91' + cleaned
+  return cleaned
+}
+
+function AuthScreen({ onSuccess }) {
+  const [mode, setMode] = useState('login')
+  const [step, setStep] = useState(1)
+  const [phone, setPhone] = useState('')
+  const [otp, setOtp] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [resendTimer, setResendTimer] = useState(0)
+  const [email, setEmail] = useState('')
+  const [foundStudent, setFoundStudent] = useState(null)
+  const timerRef = useRef(null)
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!leadId.trim()) return
+  const startResendTimer = () => {
+    setResendTimer(30)
+    if (timerRef.current) clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => {
+      setResendTimer(prev => {
+        if (prev <= 1) { clearInterval(timerRef.current); return 0 }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  const switchMode = (newMode) => {
+    setMode(newMode)
+    setStep(1)
     setError('')
-    setLoading(true)
-    const ok = await onLogin(leadId.trim())
-    if (!ok) setError('No student found with this Lead ID. Please check and try again.')
+    setOtp('')
+    setPhone('')
+    setEmail('')
+    setFoundStudent(null)
+  }
+
+  // ---- Signup handlers ----
+  const handleEmailCheck = async (e) => {
+    e.preventDefault()
+    if (!email.trim()) return
+    setLoading(true); setError('')
+    const student = await getStudentByEmail(email.trim().toLowerCase())
+    if (!student) {
+      setError('No student found with this email. Please check and try again.')
+      setLoading(false); return
+    }
+    if (student.phone) {
+      setError('This account already has a phone number linked. Please use Login instead.')
+      setLoading(false); return
+    }
+    setFoundStudent(student)
+    setStep(2)
     setLoading(false)
   }
+
+  const handleSignupSendOtp = async (e) => {
+    e.preventDefault()
+    if (!phone.trim()) return
+    setLoading(true); setError('')
+    const formatted = formatPhone(phone)
+    if (formatted.length !== 12) {
+      setError('Please enter a valid 10-digit mobile number.')
+      setLoading(false); return
+    }
+    // Check if phone already linked to someone else
+    const existing = await getStudentByPhone(formatted)
+    if (existing && existing.lead_id !== foundStudent.lead_id) {
+      setError('This phone number is already linked to another account.')
+      setLoading(false); return
+    }
+    const result = await sendOtp(formatted)
+    if (!result?.success) {
+      setError(result?.error || 'Failed to send OTP. Please try again.')
+      setLoading(false); return
+    }
+    setPhone(formatted)
+    setStep(3)
+    startResendTimer()
+    setLoading(false)
+  }
+
+  const handleSignupVerify = async (e) => {
+    e.preventDefault()
+    if (otp.length !== 6) return
+    setLoading(true); setError('')
+    const result = await verifyOtp(phone, otp)
+    if (!result?.success) {
+      setError('Invalid or expired OTP. Please try again.')
+      setLoading(false); return
+    }
+    await updateStudentPhone(foundStudent.lead_id, phone)
+    const updated = await getStudent(foundStudent.lead_id)
+    onSuccess(updated)
+    setLoading(false)
+  }
+
+  // ---- Login handlers ----
+  const handleLoginSendOtp = async (e) => {
+    e.preventDefault()
+    if (!phone.trim()) return
+    setLoading(true); setError('')
+    const formatted = formatPhone(phone)
+    if (formatted.length !== 12) {
+      setError('Please enter a valid 10-digit mobile number.')
+      setLoading(false); return
+    }
+    const student = await getStudentByPhone(formatted)
+    if (!student) {
+      setError('No account found with this number. Please sign up first.')
+      setLoading(false); return
+    }
+    setFoundStudent(student)
+    const result = await sendOtp(formatted)
+    if (!result?.success) {
+      setError(result?.error || 'Failed to send OTP. Please try again.')
+      setLoading(false); return
+    }
+    setPhone(formatted)
+    setStep(2)
+    startResendTimer()
+    setLoading(false)
+  }
+
+  const handleLoginVerify = async (e) => {
+    e.preventDefault()
+    if (otp.length !== 6) return
+    setLoading(true); setError('')
+    const result = await verifyOtp(phone, otp)
+    if (!result?.success) {
+      setError('Invalid or expired OTP. Please try again.')
+      setLoading(false); return
+    }
+    onSuccess(foundStudent)
+    setLoading(false)
+  }
+
+  const handleResend = async () => {
+    if (resendTimer > 0) return
+    setLoading(true); setError('')
+    const result = await sendOtp(phone)
+    if (!result?.success) {
+      setError(result?.error || 'Failed to resend OTP.')
+      setLoading(false); return
+    }
+    setOtp('')
+    startResendTimer()
+    setLoading(false)
+  }
+
+  const Spinner = () => <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-r-transparent" />
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary via-primary to-[#162a6b] flex items-center justify-center p-4">
@@ -143,38 +291,155 @@ function LoginScreen({ onLogin }) {
         <div className="text-center mb-8">
           <img src="/alta-white-text.png" alt="ALTA" className="h-10 mx-auto mb-4" />
           <h1 className="text-3xl font-bold text-white mb-2">Student Portal</h1>
-          <p className="text-white/50">View your coding profile and benchmarks</p>
+          <p className="text-white/50">Verify via WhatsApp to access your profile</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-2xl p-8 space-y-5">
-          <div>
-            <label className="block text-sm font-semibold text-primary mb-2">Enter your Lead ID</label>
-            <input
-              type="text"
-              value={leadId}
-              onChange={e => { setLeadId(e.target.value); setError('') }}
-              placeholder="e.g. LEAD001"
-              autoFocus
-              className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg"
-            />
+        <div className="bg-white rounded-2xl shadow-2xl p-8">
+          {/* Tab switcher */}
+          <div className="flex mb-6 bg-primary/5 rounded-xl p-1">
+            <button onClick={() => switchMode('login')}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                mode === 'login' ? 'bg-primary text-white' : 'text-primary/50 hover:text-primary'
+              }`}>Login</button>
+            <button onClick={() => switchMode('signup')}
+              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                mode === 'signup' ? 'bg-primary text-white' : 'text-primary/50 hover:text-primary'
+              }`}>Sign Up</button>
           </div>
 
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{error}</div>
+          {/* ---- SIGNUP FLOW ---- */}
+          {mode === 'signup' && step === 1 && (
+            <form onSubmit={handleEmailCheck} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                  <Mail size={14} /> Enter your registered email
+                </label>
+                <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
+                  placeholder="your.email@example.com" autoFocus
+                  className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
+              </div>
+              <button type="submit" disabled={loading || !email.trim()}
+                className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                {loading ? <Spinner /> : <>Continue <ArrowRight size={18} /></>}
+              </button>
+            </form>
           )}
 
-          <button
-            type="submit"
-            disabled={loading || !leadId.trim()}
-            className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-r-transparent" />
-            ) : (
-              <>View My Profile <ChevronRight size={20} /></>
-            )}
-          </button>
-        </form>
+          {mode === 'signup' && step === 2 && (
+            <div className="space-y-4">
+              <button onClick={() => setStep(1)} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+                <ChevronLeft size={16} /> Back
+              </button>
+              <div className="bg-ambient/10 border border-ambient/20 rounded-xl p-5 text-center">
+                <p className="text-sm text-primary/60 mb-1">Is this you?</p>
+                <p className="text-xl font-bold text-primary">{foundStudent.student_name}</p>
+                {foundStudent.college && <p className="text-sm text-primary/50 mt-1">{foundStudent.college}</p>}
+              </div>
+              <form onSubmit={handleSignupSendOtp} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                    <Phone size={14} /> Enter your WhatsApp number
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-primary/40 font-medium text-lg">+91</span>
+                    <input type="tel" value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); setError('') }}
+                      placeholder="9876543210" autoFocus maxLength={10}
+                      className="flex-1 px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg tracking-wider" />
+                  </div>
+                  <p className="text-xs text-primary/40 mt-1.5">Must be a WhatsApp-enabled number. OTP will be sent via WhatsApp.</p>
+                </div>
+                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10}
+                  className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                  {loading ? <Spinner /> : <>Send OTP <ArrowRight size={18} /></>}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {mode === 'signup' && step === 3 && (
+            <div className="space-y-4">
+              <button onClick={() => { setStep(2); setOtp('') }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+                <ChevronLeft size={16} /> Back
+              </button>
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-ambient/10 rounded-full mb-3">
+                  <Shield size={24} className="text-dark-ambient" />
+                </div>
+                <p className="text-sm text-primary/60">OTP sent to WhatsApp</p>
+                <p className="text-lg font-bold text-primary">+{phone}</p>
+              </div>
+              <form onSubmit={handleSignupVerify} className="space-y-4">
+                <input type="text" value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+                  placeholder="Enter 6-digit OTP" autoFocus maxLength={6}
+                  className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-2xl text-center tracking-[0.5em] font-mono" />
+                <button type="submit" disabled={loading || otp.length !== 6}
+                  className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                  {loading ? <Spinner /> : <>Verify & Sign Up <Check size={18} /></>}
+                </button>
+                <p className="text-center text-sm text-primary/40">
+                  {resendTimer > 0 ? `Resend in ${resendTimer}s` : (
+                    <button type="button" onClick={handleResend} className="text-ambient hover:text-dark-ambient font-medium transition-colors">Resend OTP</button>
+                  )}
+                </p>
+              </form>
+            </div>
+          )}
+
+          {/* ---- LOGIN FLOW ---- */}
+          {mode === 'login' && step === 1 && (
+            <form onSubmit={handleLoginSendOtp} className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                  <Phone size={14} /> Enter your WhatsApp number
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-primary/40 font-medium text-lg">+91</span>
+                  <input type="tel" value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); setError('') }}
+                    placeholder="9876543210" autoFocus maxLength={10}
+                    className="flex-1 px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg tracking-wider" />
+                </div>
+                <p className="text-xs text-primary/40 mt-1.5">Must be a WhatsApp-enabled number. OTP will be sent via WhatsApp.</p>
+              </div>
+              <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10}
+                className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                {loading ? <Spinner /> : <>Send OTP <ArrowRight size={18} /></>}
+              </button>
+            </form>
+          )}
+
+          {mode === 'login' && step === 2 && (
+            <div className="space-y-4">
+              <button onClick={() => { setStep(1); setOtp('') }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+                <ChevronLeft size={16} /> Back
+              </button>
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-ambient/10 rounded-full mb-3">
+                  <Shield size={24} className="text-dark-ambient" />
+                </div>
+                <p className="text-sm text-primary/60">OTP sent to WhatsApp</p>
+                <p className="text-lg font-bold text-primary">+{phone}</p>
+              </div>
+              <form onSubmit={handleLoginVerify} className="space-y-4">
+                <input type="text" value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+                  placeholder="Enter 6-digit OTP" autoFocus maxLength={6}
+                  className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-2xl text-center tracking-[0.5em] font-mono" />
+                <button type="submit" disabled={loading || otp.length !== 6}
+                  className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                  {loading ? <Spinner /> : <>Verify & Login <Check size={18} /></>}
+                </button>
+                <p className="text-center text-sm text-primary/40">
+                  {resendTimer > 0 ? `Resend in ${resendTimer}s` : (
+                    <button type="button" onClick={handleResend} className="text-ambient hover:text-dark-ambient font-medium transition-colors">Resend OTP</button>
+                  )}
+                </p>
+              </form>
+            </div>
+          )}
+
+          {error && (
+            <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">{error}</div>
+          )}
+        </div>
 
         <p className="text-center text-white/30 text-sm mt-6">ALTA School of Technology</p>
       </div>

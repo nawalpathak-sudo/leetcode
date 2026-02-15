@@ -297,6 +297,67 @@ export async function getStudentBySlug(slug) {
   return data.find(s => generateProfileSlug(s) === slug) || null
 }
 
+// ---- Auth (WhatsApp OTP) ----
+
+export async function getStudentByEmail(email) {
+  const { data, error } = await supabase
+    .from('students')
+    .select('*')
+    .eq('email', email)
+    .single()
+  if (error) return null
+  return data
+}
+
+export async function getStudentByPhone(phone) {
+  const { data, error } = await supabase
+    .from('students')
+    .select('*')
+    .eq('phone', phone)
+    .single()
+  if (error) return null
+  return data
+}
+
+export async function updateStudentPhone(leadId, phone) {
+  const { error } = await supabase
+    .from('students')
+    .update({ phone })
+    .eq('lead_id', leadId)
+  if (error) console.error('Update student phone error:', error)
+  return !error
+}
+
+export async function sendOtp(phone) {
+  try {
+    const res = await fetch('/api/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { success: false, error: data.error || 'Failed to send OTP' }
+    return data
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+}
+
+export async function verifyOtp(phone, code) {
+  try {
+    const res = await fetch('/api/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { success: false, error: data.error || 'Invalid or expired OTP' }
+    return data
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+}
+
 // ---- Student Portal ----
 
 export async function getStudent(leadId) {
