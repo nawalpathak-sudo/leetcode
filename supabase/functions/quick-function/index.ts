@@ -177,18 +177,81 @@ serve(async (req) => {
     const query = titleSlug ? PROBLEM_QUERY : LEETCODE_QUERY
     const variables = titleSlug ? { titleSlug } : { username }
 
+    // Fetch CSRF token from LeetCode first
+    let csrfToken = ''
+    try {
+      const initRes = await fetch('https://leetcode.com/', {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      })
+      const cookies = initRes.headers.get('set-cookie') || ''
+      const csrfMatch = cookies.match(/csrftoken=([^;]+)/)
+      if (csrfMatch) csrfToken = csrfMatch[1]
+    } catch {}
+
+    const graphqlHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://leetcode.com',
+      'Origin': 'https://leetcode.com',
+    }
+    if (csrfToken) {
+      graphqlHeaders['x-csrftoken'] = csrfToken
+      graphqlHeaders['Cookie'] = `csrftoken=${csrfToken}`
+    }
+
     const response = await fetchWithRetry(LEETCODE_GRAPHQL_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://leetcode.com',
-        'Origin': 'https://leetcode.com',
-      },
+      headers: graphqlHeaders,
       body: JSON.stringify({ query, variables }),
     })
 
-    const data = await response.json()
+    const text = await response.text()
+    let data
+    try {
+      data = JSON.parse(text)
+    } catch {
+      // GraphQL returned non-JSON (likely HTML error page)
+      return new Response(JSON.stringify({ error: 'LeetCode returned non-JSON response', status: response.status }), {
+        status: 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // If GraphQL returned errors, try the public API as fallback for problem queries
+    if (titleSlug && (!data?.data?.question)) {
+      try {
+        const fallbackRes = await fetchWithRetry(`https://alfa-leetcode-api.onrender.com/select?titleSlug=${encodeURIComponent(titleSlug)}`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+        })
+        const fb = await fallbackRes.json()
+        if (fb && (fb.questionId || fb.title)) {
+          return new Response(JSON.stringify({
+            data: {
+              question: {
+                questionId: fb.questionId,
+                questionFrontendId: fb.questionFrontendId || fb.questionId,
+                title: fb.questionTitle || fb.title,
+                titleSlug: fb.titleSlug || titleSlug,
+                difficulty: fb.difficulty,
+                acRate: fb.acRate,
+                stats: fb.stats || '{}',
+                likes: fb.likes || 0,
+                dislikes: fb.dislikes || 0,
+                topicTags: fb.topicTags || [],
+                hints: fb.hints || [],
+                similarQuestions: typeof fb.similarQuestions === 'string' ? fb.similarQuestions : JSON.stringify(fb.similarQuestions || []),
+              }
+            }
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+      } catch {}
+    }
 
     return new Response(JSON.stringify(data), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
