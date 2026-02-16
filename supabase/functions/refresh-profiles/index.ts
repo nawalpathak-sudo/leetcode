@@ -66,6 +66,10 @@ query getUserProfile($username: String!) {
     statusDisplay
     lang
   }
+  recentAcSubmissionList(username: $username, limit: 100) {
+    titleSlug
+    timestamp
+  }
   matchedUserStats: matchedUser(username: $username) {
     submitStatsGlobal {
       acSubmissionNum {
