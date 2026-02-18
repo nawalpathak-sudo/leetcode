@@ -26,6 +26,34 @@ export async function upsertStudents(rows) {
   return !error
 }
 
+export async function bulkUpdateEmails(rows) {
+  // rows: [{ lead_id, email }]
+  let updated = 0, inserted = 0, failed = []
+  for (const row of rows) {
+    if (!row.lead_id || !row.email) { failed.push(row.lead_id || '(empty)'); continue }
+    const { data: existing } = await supabase
+      .from('students')
+      .select('lead_id')
+      .eq('lead_id', row.lead_id)
+      .single()
+    if (existing) {
+      const { error } = await supabase
+        .from('students')
+        .update({ email: row.email })
+        .eq('lead_id', row.lead_id)
+      if (error) { failed.push(row.lead_id); continue }
+      updated++
+    } else {
+      const { error } = await supabase
+        .from('students')
+        .insert({ lead_id: row.lead_id, email: row.email })
+      if (error) { failed.push(row.lead_id); continue }
+      inserted++
+    }
+  }
+  return { updated, inserted, failed }
+}
+
 export async function loadAllStudents() {
   const { data, error } = await supabase
     .from('students')
@@ -34,6 +62,23 @@ export async function loadAllStudents() {
 
   if (error) { console.error('Load students error:', error); return [] }
   return data || []
+}
+
+// ---- Coding Profiles Map (lead_id -> { platform: username }) ----
+
+export async function loadAllCodingProfilesMap() {
+  const { data, error } = await supabase
+    .from('coding_profiles')
+    .select('lead_id, platform, username')
+
+  if (error) { console.error('Load profiles map error:', error); return {} }
+
+  const map = {}
+  for (const row of (data || [])) {
+    if (!map[row.lead_id]) map[row.lead_id] = {}
+    map[row.lead_id][row.platform] = row.username
+  }
+  return map
 }
 
 // ---- Coding Profiles ----
@@ -295,6 +340,69 @@ export async function getStudentBySlug(slug) {
   const { data, error } = await supabase.from('students').select('*')
   if (error || !data) return null
   return data.find(s => generateProfileSlug(s) === slug) || null
+}
+
+// ---- Admin Users ----
+
+export async function getAdminByPhone(phone) {
+  const { data, error } = await supabase
+    .from('admin_users')
+    .select('*')
+    .eq('phone', phone)
+    .eq('active', true)
+    .single()
+  if (error) return null
+  return data
+}
+
+export async function getAdminById(id) {
+  const { data, error } = await supabase
+    .from('admin_users')
+    .select('*')
+    .eq('id', id)
+    .eq('active', true)
+    .single()
+  if (error) return null
+  return data
+}
+
+export async function loadAllAdminUsers() {
+  const { data, error } = await supabase
+    .from('admin_users')
+    .select('*')
+    .order('created_at', { ascending: false })
+  if (error) { console.error('Load admin users error:', error); return [] }
+  return data || []
+}
+
+export async function createAdminUser({ name, phone, role, campus }) {
+  try {
+    const res = await fetch('/api/manage-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'create', name, phone, role, campus }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { error: data.error || 'Failed to create user' }
+    return { data: data.user }
+  } catch (err) {
+    return { error: err.message }
+  }
+}
+
+export async function updateAdminUser(id, updates) {
+  try {
+    const res = await fetch('/api/manage-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', id, ...updates }),
+    })
+    const data = await res.json()
+    if (!res.ok) return { error: data.error || 'Failed to update user' }
+    return { success: true }
+  } catch (err) {
+    return { error: err.message }
+  }
 }
 
 // ---- Auth (WhatsApp OTP) ----

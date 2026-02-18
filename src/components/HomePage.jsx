@@ -363,6 +363,7 @@ export default function HomePage() {
             <a href="#leaderboard" className="text-white/50 hover:text-white text-sm font-medium transition-colors hidden sm:block">Leaderboard</a>
             <a href="#banners" className="text-white/50 hover:text-white text-sm font-medium transition-colors hidden sm:block">Events</a>
             <Link to="/practice" className="text-white/50 hover:text-white text-sm font-medium transition-colors hidden sm:block">Practice</Link>
+            <Link to="/projects" className="text-white/50 hover:text-white text-sm font-medium transition-colors hidden sm:block">Projects</Link>
             <a href="#ai-news" className="text-white/50 hover:text-white text-sm font-medium transition-colors hidden sm:block">AI Corner</a>
             <Link to="/portal"
               className="px-5 py-2 bg-gradient-to-r from-[#F59E0B] to-[#D97706] text-[#050A18] rounded-lg font-bold text-sm cv-glow-btn">
@@ -1005,6 +1006,7 @@ export default function HomePage() {
           </div>
           <div className="flex items-center gap-6 text-white/20 text-sm">
             <Link to="/practice" className="hover:text-[#F59E0B] transition-colors">Practice</Link>
+            <Link to="/projects" className="hover:text-[#F59E0B] transition-colors">Projects</Link>
             <Link to="/portal" className="hover:text-[#F59E0B] transition-colors">Student Portal</Link>
             <Link to="/admin" className="hover:text-[#F59E0B] transition-colors">Admin</Link>
           </div>

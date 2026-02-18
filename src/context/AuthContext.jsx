@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react'
 import { getStudent } from '../lib/db'
 
 const AuthContext = createContext(null)
+const SESSION_TTL = 15 * 24 * 60 * 60 * 1000 // 15 days
 
 export function AuthProvider({ children }) {
   const [student, setStudent] = useState(null)
@@ -11,7 +12,12 @@ export function AuthProvider({ children }) {
     const saved = localStorage.getItem('alta_session')
     if (saved) {
       try {
-        const { lead_id } = JSON.parse(saved)
+        const { lead_id, expiresAt } = JSON.parse(saved)
+        if (expiresAt && Date.now() > expiresAt) {
+          localStorage.removeItem('alta_session')
+          setLoading(false)
+          return
+        }
         getStudent(lead_id).then(s => {
           if (s) setStudent(s)
           else localStorage.removeItem('alta_session')
@@ -31,6 +37,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('alta_session', JSON.stringify({
       lead_id: studentData.lead_id,
       phone: studentData.phone,
+      expiresAt: Date.now() + SESSION_TTL,
     }))
   }
 

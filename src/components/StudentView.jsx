@@ -12,7 +12,7 @@ import {
 const BUCKET_COLORS = ['#22ACD1', '#3BC3E2', '#0D1E56', '#6B7280', '#D1D5DB']
 const CHART_TOOLTIP = { background: '#FFFFFF', border: '1px solid #3BC3E2', borderRadius: 8, color: '#0D1E56' }
 
-export default function StudentView({ platform, platformName }) {
+export default function StudentView({ platform, platformName, adminUser }) {
   const [tab, setTab] = useState('dashboard')
 
   return (
@@ -27,8 +27,8 @@ export default function StudentView({ platform, platformName }) {
         <TabBtn active={tab === 'lookup'} onClick={() => setTab('lookup')} label="Profile Lookup" />
       </div>
 
-      {tab === 'dashboard' && <BatchDashboard platform={platform} platformName={platformName} />}
-      {tab === 'lookup' && <ProfileLookup platform={platform} platformName={platformName} />}
+      {tab === 'dashboard' && <BatchDashboard platform={platform} platformName={platformName} adminUser={adminUser} />}
+      {tab === 'lookup' && <ProfileLookup platform={platform} platformName={platformName} adminUser={adminUser} />}
     </div>
   )
 }
@@ -52,10 +52,12 @@ function TabBtn({ active, onClick, label }) {
 // BATCH DASHBOARD
 // ============================================================
 
-function BatchDashboard({ platform, platformName }) {
+function BatchDashboard({ platform, platformName, adminUser }) {
+  const isFaculty = adminUser?.role === 'faculty'
+  const facultyCampus = adminUser?.campus
   const [profiles, setProfiles] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filterCollege, setFilterCollege] = useState('All')
+  const [filterCollege, setFilterCollege] = useState(isFaculty && facultyCampus ? facultyCampus : 'All')
   const [filterBatch, setFilterBatch] = useState('All')
 
   useEffect(() => {
@@ -67,7 +69,12 @@ function BatchDashboard({ platform, platformName }) {
         ...p,
         activity: computeRecentActivity(p.raw_json, platform),
       }))
-      setProfiles(withActivity)
+      // Faculty can only see their campus
+      if (isFaculty && facultyCampus) {
+        setProfiles(withActivity.filter(p => p.college === facultyCampus))
+      } else {
+        setProfiles(withActivity)
+      }
       setLoading(false)
     })()
   }, [platform])
@@ -104,7 +111,8 @@ function BatchDashboard({ platform, platformName }) {
         <div>
           <label className="block text-xs text-primary/50 font-medium mb-1">College</label>
           <select value={filterCollege} onChange={e => setFilterCollege(e.target.value)}
-            className="bg-white border border-primary/20 rounded-lg px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-ambient">
+            disabled={isFaculty && facultyCampus}
+            className={`bg-white border border-primary/20 rounded-lg px-3 py-1.5 text-sm text-primary focus:outline-none focus:border-ambient ${isFaculty && facultyCampus ? 'opacity-60 cursor-not-allowed' : ''}`}>
             {colleges.map(c => <option key={c}>{c}</option>)}
           </select>
         </div>
@@ -511,7 +519,9 @@ function CFBatchCharts({ data, platform, platformName }) {
 // PROFILE LOOKUP
 // ============================================================
 
-function ProfileLookup({ platform, platformName }) {
+function ProfileLookup({ platform, platformName, adminUser }) {
+  const isFaculty = adminUser?.role === 'faculty'
+  const facultyCampus = adminUser?.campus
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -525,7 +535,11 @@ function ProfileLookup({ platform, platformName }) {
     setResults(null)
     setSelectedProfile(null)
 
-    const matches = await searchProfiles(platform, query.trim())
+    let matches = await searchProfiles(platform, query.trim())
+    // Faculty can only see their campus
+    if (isFaculty && facultyCampus) {
+      matches = matches.filter(m => m.college === facultyCampus)
+    }
 
     if (matches.length === 1 && matches[0].raw_json) {
       setSelectedProfile(matches[0])

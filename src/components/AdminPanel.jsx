@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Trash2, UserMinus, RefreshCw, Users, Link2 } from 'lucide-react'
+import { Upload, Trash2, UserMinus, RefreshCw, Users, Link2, Mail } from 'lucide-react'
 import { fetchLeetCodeData, fetchCodeforcesData, fetchGitHubData, sanitizeUsername } from '../lib/api'
 import {
   loadAllProfiles, saveProfile, deleteProfile, clearAllProfiles,
-  upsertStudents, loadAllStudents, linkProfile,
+  upsertStudents, loadAllStudents, linkProfile, loadAllCodingProfilesMap,
+  bulkUpdateEmails,
 } from '../lib/db'
 import Papa from 'papaparse'
 
@@ -14,10 +15,15 @@ function getFetcher(platform) {
   return null
 }
 
-export default function AdminPanel({ platform, platformName, platforms }) {
+export default function AdminPanel({ platforms, adminUser }) {
+  const isMaster = adminUser?.id === 'master'
+  const [platform, setPlatform] = useState(platforms[0]?.slug || '')
   const [profiles, setProfiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('students')
+
+  const current = platforms.find(p => p.slug === platform)
+  const platformName = current?.display_name || platform
 
   const reload = async () => {
     setLoading(true)
@@ -30,27 +36,40 @@ export default function AdminPanel({ platform, platformName, platforms }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-primary">Admin Panel</h2>
+        <h2 className="text-2xl font-bold text-primary">Students & Data</h2>
         <p className="text-primary/60 mt-1">Import students, link coding profiles, and manage data.</p>
       </div>
 
-      <div className="flex gap-2 flex-wrap">
-        <TabButton active={tab === 'students'} onClick={() => setTab('students')} icon={<Users size={16} />} label="Import Students" />
-        <TabButton active={tab === 'link'} onClick={() => setTab('link')} icon={<Link2 size={16} />} label="Link Profiles" />
-        <TabButton active={tab === 'manage'} onClick={() => setTab('manage')} icon={<RefreshCw size={16} />} label={`Manage ${platformName}`} />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          <TabButton active={tab === 'students'} onClick={() => setTab('students')} icon={<Users size={16} />} label="Students" />
+          <TabButton active={tab === 'link'} onClick={() => setTab('link')} icon={<Link2 size={16} />} label="Link Profiles" />
+          <TabButton active={tab === 'manage'} onClick={() => setTab('manage')} icon={<RefreshCw size={16} />} label="Manage Data" />
+          {isMaster && <TabButton active={tab === 'emails'} onClick={() => setTab('emails')} icon={<Mail size={16} />} label="Update Emails" />}
+        </div>
+        {tab !== 'students' && tab !== 'emails' && (
+          <select
+            value={platform}
+            onChange={e => setPlatform(e.target.value)}
+            className="ml-auto bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary font-medium focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient"
+          >
+            {platforms.map(p => <option key={p.slug} value={p.slug}>{p.display_name}</option>)}
+          </select>
+        )}
       </div>
 
-      {tab === 'students' && <StudentImport />}
-      {tab === 'link' && <LinkAndFetch platforms={platforms} onComplete={reload} />}
+      {tab === 'students' && <StudentImport platforms={platforms} adminUser={adminUser} />}
+      {tab === 'link' && <LinkAndFetch platforms={platforms} onComplete={reload} adminUser={adminUser} />}
       {tab === 'manage' && (
         loading ? <Spinner /> : profiles.length === 0 ? (
           <div className="bg-ambient/10 border border-ambient/30 text-primary px-4 py-3 rounded-lg">
             No {platformName} profiles in database yet. Link profiles first.
           </div>
         ) : (
-          <ProfileManager profiles={profiles} platform={platform} platformName={platformName} onUpdate={reload} />
+          <ProfileManager profiles={profiles} platform={platform} platformName={platformName} onUpdate={reload} adminUser={adminUser} />
         )
       )}
+      {tab === 'emails' && isMaster && <EmailUploader />}
     </div>
   )
 }
@@ -80,17 +99,54 @@ function Spinner() {
 
 // ---- Student Import ----
 
-function StudentImport() {
+function StudentImport({ platforms = [], adminUser }) {
+  const isFaculty = adminUser?.role === 'faculty'
+  const facultyCampus = adminUser?.campus
   const fileRef = useRef()
   const [csvData, setCsvData] = useState(null)
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState(null)
   const [students, setStudents] = useState([])
   const [loadingStudents, setLoadingStudents] = useState(true)
+  const [profileMap, setProfileMap] = useState({})
+  const [collegeFilter, setCollegeFilter] = useState(isFaculty && facultyCampus ? facultyCampus : 'all')
+  const [batchFilter, setBatchFilter] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [editingCell, setEditingCell] = useState(null)
+  const [editValue, setEditValue] = useState('')
+  const [savingCell, setSavingCell] = useState(false)
 
-  useEffect(() => {
-    loadAllStudents().then(data => { setStudents(data); setLoadingStudents(false) })
-  }, [])
+  const loadData = async () => {
+    setLoadingStudents(true)
+    const [studentsData, mapData] = await Promise.all([
+      loadAllStudents(),
+      loadAllCodingProfilesMap(),
+    ])
+    setStudents(studentsData)
+    setProfileMap(mapData)
+    setLoadingStudents(false)
+  }
+
+  useEffect(() => { loadData() }, [])
+
+  const campusStudents = isFaculty && facultyCampus
+    ? students.filter(s => s.college === facultyCampus)
+    : students
+
+  const colleges = [...new Set(campusStudents.map(s => s.college).filter(Boolean))].sort()
+  const batches = [...new Set(campusStudents.map(s => s.batch).filter(Boolean))].sort()
+
+  const filtered = campusStudents.filter(s => {
+    if (collegeFilter !== 'all' && s.college !== collegeFilter) return false
+    if (batchFilter !== 'all' && s.batch !== batchFilter) return false
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      const nameMatch = (s.student_name || '').toLowerCase().includes(q)
+      const idMatch = (s.lead_id || '').toLowerCase().includes(q)
+      if (!nameMatch && !idMatch) return false
+    }
+    return true
+  })
 
   const handleFile = (e) => {
     const file = e.target.files[0]
@@ -127,15 +183,49 @@ function StudentImport() {
     const ok = await upsertStudents(csvData)
     setResult(ok ? `Saved ${csvData.length} students successfully.` : 'Error saving students.')
     if (ok) {
-      setStudents(await loadAllStudents())
+      await loadData()
       setCsvData(null)
       if (fileRef.current) fileRef.current.value = ''
     }
     setSaving(false)
   }
 
+  const handleStartEdit = (lead_id, platform) => {
+    const existing = profileMap[lead_id]?.[platform] || ''
+    setEditingCell({ lead_id, platform })
+    setEditValue(existing)
+  }
+
+  const handleSaveId = async () => {
+    if (!editingCell) return
+    const { lead_id, platform } = editingCell
+    const username = sanitizeUsername(editValue.trim())
+    if (!username) {
+      setEditingCell(null)
+      setEditValue('')
+      return
+    }
+    setSavingCell(true)
+    const ok = await linkProfile(lead_id, platform, username)
+    if (ok) {
+      setProfileMap(prev => ({
+        ...prev,
+        [lead_id]: { ...(prev[lead_id] || {}), [platform]: username }
+      }))
+    }
+    setSavingCell(false)
+    setEditingCell(null)
+    setEditValue('')
+  }
+
+  const handleEditKeyDown = (e) => {
+    if (e.key === 'Enter') handleSaveId()
+    if (e.key === 'Escape') { setEditingCell(null); setEditValue('') }
+  }
+
   return (
     <div className="space-y-6">
+      {/* CSV Upload */}
       <div className="bg-white rounded-xl p-6 space-y-4 border border-primary/10 shadow-sm">
         <h3 className="font-semibold text-lg text-primary">Upload Students CSV</h3>
         <p className="text-sm text-primary/60">
@@ -187,28 +277,100 @@ function StudentImport() {
         )}
       </div>
 
-      {loadingStudents ? <Spinner /> : students.length > 0 && (
-        <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
-          <h3 className="font-semibold text-lg text-primary mb-3">{students.length} Students in Database</h3>
-          <div className="overflow-x-auto max-h-96 overflow-y-auto border border-primary/10 rounded-lg">
+      {/* All Students with Filters */}
+      {loadingStudents ? <Spinner /> : campusStudents.length > 0 && (
+        <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <h3 className="font-semibold text-lg text-primary">{campusStudents.length} Students{isFaculty && facultyCampus ? ` — ${facultyCampus}` : ' in Database'}</h3>
+            <span className="text-sm text-primary/40">Showing {filtered.length} of {campusStudents.length}</span>
+          </div>
+
+          {/* Filters */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search name or ID..."
+              className="bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient w-52"
+            />
+            <select value={collegeFilter} onChange={e => setCollegeFilter(e.target.value)}
+              disabled={isFaculty && facultyCampus}
+              className={`bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient ${isFaculty && facultyCampus ? 'opacity-60 cursor-not-allowed' : ''}`}>
+              <option value="all">All Campuses</option>
+              {colleges.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={batchFilter} onChange={e => setBatchFilter(e.target.value)}
+              className="bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient">
+              <option value="all">All Years</option>
+              {batches.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+            {(collegeFilter !== 'all' || batchFilter !== 'all' || searchQuery) && (
+              <button onClick={() => { setCollegeFilter('all'); setBatchFilter('all'); setSearchQuery('') }}
+                className="text-xs text-dark-ambient hover:underline">Clear filters</button>
+            )}
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto max-h-[600px] overflow-y-auto border border-primary/10 rounded-lg">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-primary/5">
+              <thead className="sticky top-0 bg-[#f3f4f8] z-10">
                 <tr className="text-primary/60">
-                  <th className="py-2 px-3 text-left font-medium">Lead ID</th>
-                  <th className="py-2 px-3 text-left font-medium">Name</th>
-                  <th className="py-2 px-3 text-left font-medium">Email</th>
-                  <th className="py-2 px-3 text-left font-medium">College</th>
-                  <th className="py-2 px-3 text-left font-medium">Batch</th>
+                  <th className="py-2.5 px-3 text-left font-medium">Name</th>
+                  <th className="py-2.5 px-3 text-left font-medium">College</th>
+                  <th className="py-2.5 px-3 text-left font-medium">Batch</th>
+                  {platforms.map(p => (
+                    <th key={p.slug} className="py-2.5 px-3 text-left font-medium">{p.display_name} ID</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {students.map(s => (
-                  <tr key={s.lead_id} className="border-t border-primary/5">
-                    <td className="py-1.5 px-3 text-dark-ambient">{s.lead_id}</td>
-                    <td className="py-1.5 px-3">{s.student_name}</td>
-                    <td className="py-1.5 px-3">{s.email}</td>
-                    <td className="py-1.5 px-3">{s.college}</td>
-                    <td className="py-1.5 px-3">{s.batch}</td>
+                {filtered.map(s => (
+                  <tr key={s.lead_id} className="border-t border-primary/5 hover:bg-ambient/5">
+                    <td className="py-2 px-3">
+                      <div className="font-medium text-primary">{s.student_name || '—'}</div>
+                      <div className="text-xs text-primary/30">{s.lead_id}</div>
+                    </td>
+                    <td className="py-2 px-3 text-primary/70">{s.college}</td>
+                    <td className="py-2 px-3 text-primary/70">{s.batch}</td>
+                    {platforms.map(p => {
+                      const isEditing = editingCell?.lead_id === s.lead_id && editingCell?.platform === p.slug
+                      const linked = profileMap[s.lead_id]?.[p.slug]
+                      return (
+                        <td key={p.slug} className="py-2 px-3">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                autoFocus
+                                value={editValue}
+                                onChange={e => setEditValue(e.target.value)}
+                                onKeyDown={handleEditKeyDown}
+                                onBlur={handleSaveId}
+                                disabled={savingCell}
+                                className="bg-white border border-ambient rounded px-2 py-1 text-sm text-primary w-32 focus:outline-none focus:ring-1 focus:ring-ambient"
+                                placeholder={`${p.display_name} username`}
+                              />
+                            </div>
+                          ) : linked ? (
+                            <button
+                              onClick={() => handleStartEdit(s.lead_id, p.slug)}
+                              className="text-dark-ambient font-medium hover:underline cursor-pointer text-left"
+                              title="Click to edit"
+                            >
+                              {linked}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleStartEdit(s.lead_id, p.slug)}
+                              className="text-primary/20 hover:text-ambient cursor-pointer text-sm"
+                              title="Click to add username"
+                            >
+                              + Add
+                            </button>
+                          )}
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -220,9 +382,119 @@ function StudentImport() {
   )
 }
 
+// ---- Email Uploader (master only) ----
+
+function EmailUploader() {
+  const fileRef = useRef()
+  const [csvData, setCsvData] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [result, setResult] = useState(null)
+
+  const handleFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setResult(null)
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (res) => {
+        const cols = res.meta.fields.map(f => f.trim().toLowerCase())
+        if (!cols.includes('lead_id') || !cols.includes('email')) {
+          alert('CSV must have lead_id and email columns')
+          return
+        }
+        const rows = res.data.map(r => {
+          const n = {}
+          for (const [k, v] of Object.entries(r)) n[k.trim().toLowerCase()] = (v || '').trim()
+          return { lead_id: n.lead_id, email: n.email }
+        }).filter(r => r.lead_id && r.email)
+        setCsvData(rows)
+      }
+    })
+  }
+
+  const handleSave = async () => {
+    if (!csvData?.length) return
+    setSaving(true)
+    setResult(null)
+    const res = await bulkUpdateEmails(csvData)
+    setResult(res)
+    setSaving(false)
+  }
+
+  const handleClear = () => {
+    setCsvData(null)
+    setResult(null)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  return (
+    <div className="bg-white rounded-xl p-6 space-y-4 border border-primary/10 shadow-sm">
+      <h3 className="font-semibold text-lg text-primary flex items-center gap-2">
+        <Mail size={18} /> Bulk Update Student Emails
+      </h3>
+      <p className="text-sm text-primary/60">
+        Upload a CSV with <strong>lead_id</strong> and <strong>email</strong> columns. Existing students will have their email updated. New lead_ids will be inserted.
+      </p>
+
+      <input ref={fileRef} type="file" accept=".csv" onChange={handleFile}
+        className="block text-sm text-primary/60 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-primary file:text-white file:font-medium file:cursor-pointer hover:file:bg-primary/90" />
+
+      {csvData && (
+        <>
+          <p className="text-dark-ambient font-medium">{csvData.length} rows found</p>
+          <div className="overflow-x-auto max-h-64 overflow-y-auto border border-primary/10 rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-[#f3f4f8] z-10">
+                <tr className="text-primary/60">
+                  <th className="py-2 px-3 text-left font-medium">#</th>
+                  <th className="py-2 px-3 text-left font-medium">Lead ID</th>
+                  <th className="py-2 px-3 text-left font-medium">Email</th>
+                </tr>
+              </thead>
+              <tbody>
+                {csvData.slice(0, 30).map((r, i) => (
+                  <tr key={i} className="border-t border-primary/5">
+                    <td className="py-1.5 px-3 text-primary/30">{i + 1}</td>
+                    <td className="py-1.5 px-3 text-dark-ambient">{r.lead_id}</td>
+                    <td className="py-1.5 px-3">{r.email}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {csvData.length > 30 && <p className="text-xs text-primary/40">Showing first 30 of {csvData.length}</p>}
+
+          {result && (
+            <div className={`px-4 py-3 rounded-lg text-sm ${
+              result.failed.length
+                ? 'bg-amber-50 border border-amber-200 text-amber-800'
+                : 'bg-green-50 border border-green-200 text-green-800'
+            }`}>
+              Updated {result.updated}, inserted {result.inserted} of {csvData.length} rows.
+              {result.failed.length > 0 && <> Failed: {result.failed.join(', ')}</>}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button onClick={handleSave} disabled={saving}
+              className="px-6 py-2.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-lg font-medium transition-colors">
+              {saving ? 'Saving...' : 'Update Emails'}
+            </button>
+            <button onClick={handleClear}
+              className="px-4 py-2.5 bg-primary/5 hover:bg-primary/10 text-primary/60 rounded-lg font-medium transition-colors">
+              Clear
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ---- Link & Fetch (platform-agnostic) ----
 
-function LinkAndFetch({ platforms, onComplete }) {
+function LinkAndFetch({ platforms, onComplete, adminUser }) {
   const fileRef = useRef()
   const [mode, setMode] = useState('csv')
   const [manualPlatform, setManualPlatform] = useState(platforms[0]?.slug || '')
@@ -495,7 +767,10 @@ function LinkAndFetch({ platforms, onComplete }) {
 
 // ---- Profile Manager ----
 
-function ProfileManager({ profiles, platform, platformName, onUpdate }) {
+function ProfileManager({ profiles: allProfiles, platform, platformName, onUpdate, adminUser }) {
+  const isFaculty = adminUser?.role === 'faculty'
+  const facultyCampus = adminUser?.campus
+  const profiles = isFaculty && facultyCampus ? allProfiles.filter(p => p.college === facultyCampus) : allProfiles
   const [delUser, setDelUser] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState({ current: 0, total: 0, name: '' })
