@@ -17,6 +17,7 @@ import { AuthProvider } from './context/AuthContext'
 const DEFAULT_PLATFORMS = [
   { slug: 'leetcode', display_name: 'LeetCode', base_url: 'https://leetcode.com', active: true },
   { slug: 'codeforces', display_name: 'Codeforces', base_url: 'https://codeforces.com', active: true },
+  { slug: 'github', display_name: 'GitHub', base_url: 'https://github.com', active: true },
 ]
 
 function formatAdminPhone(raw) {

@@ -130,6 +130,116 @@ async function fetchCodeforces(username: string) {
   }
 }
 
+// ---- GitHub GraphQL ----
+
+const GITHUB_GRAPHQL_URL = 'https://api.github.com/graphql'
+
+const GITHUB_QUERY = `
+query($username: String!) {
+  user(login: $username) {
+    login
+    name
+    bio
+    avatarUrl
+    createdAt
+    followers { totalCount }
+    following { totalCount }
+    repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        name
+        description
+        url
+        isFork
+        stargazerCount
+        forkCount
+        primaryLanguage { name }
+        updatedAt
+      }
+    }
+    contributionsCollection {
+      totalCommitContributions
+      totalPullRequestContributions
+      totalIssueContributions
+      totalRepositoryContributions
+      restrictedContributionsCount
+      contributionCalendar {
+        totalContributions
+        weeks {
+          contributionDays {
+            date
+            contributionCount
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+async function fetchGitHub(username: string) {
+  const ghToken = Deno.env.get('GITHUB_TOKEN')
+  if (!ghToken) return null
+
+  try {
+    const res = await fetch(GITHUB_GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `bearer ${ghToken}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'AlgoArena-Bot',
+      },
+      body: JSON.stringify({ query: GITHUB_QUERY, variables: { username } }),
+    })
+    if (!res.ok) return null
+    const json = await res.json()
+    const ghUser = json.data?.user
+    if (!ghUser) return null
+
+    const repos = (ghUser.repositories.nodes || []).map((r: any) => ({
+      name: r.name,
+      description: r.description,
+      fork: r.isFork,
+      stargazers_count: r.stargazerCount,
+      forks_count: r.forkCount,
+      language: r.primaryLanguage?.name || null,
+      updated_at: r.updatedAt,
+    }))
+
+    const contributions: Record<string, number> = {}
+    for (const week of ghUser.contributionsCollection.contributionCalendar.weeks) {
+      for (const day of week.contributionDays) {
+        contributions[day.date] = day.contributionCount
+      }
+    }
+
+    return {
+      user: {
+        login: ghUser.login,
+        name: ghUser.name,
+        bio: ghUser.bio,
+        avatar_url: ghUser.avatarUrl,
+        created_at: ghUser.createdAt,
+        public_repos: ghUser.repositories.totalCount,
+        followers: ghUser.followers.totalCount,
+        following: ghUser.following.totalCount,
+      },
+      repos,
+      events: [],
+      contributions,
+      graphql_stats: {
+        total_commits: ghUser.contributionsCollection.totalCommitContributions + ghUser.contributionsCollection.restrictedContributionsCount,
+        total_prs: ghUser.contributionsCollection.totalPullRequestContributions,
+        total_issues: ghUser.contributionsCollection.totalIssueContributions,
+        total_repos_contributed: ghUser.contributionsCollection.totalRepositoryContributions,
+        total_contributions_year: ghUser.contributionsCollection.contributionCalendar.totalContributions,
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
 // ---- Scoring (mirrors src/lib/scoring.js exactly) ----
 
 function calculateLeetCodeScore(data: any): number {
@@ -250,6 +360,77 @@ function extractStats(platform: string, rawData: any) {
     }
   }
 
+  if (platform === 'github') {
+    if (!rawData?.user) return null
+    const user = rawData.user
+    const repos = rawData.repos || []
+    const gql = rawData.graphql_stats || {}
+
+    const langMap: Record<string, number> = {}
+    let totalStars = 0
+    let totalForks = 0
+    for (const r of repos) {
+      if (r.fork) continue
+      if (r.language) langMap[r.language] = (langMap[r.language] || 0) + 1
+      totalStars += r.stargazers_count || 0
+      totalForks += r.forks_count || 0
+    }
+    const languages = Object.entries(langMap).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }))
+    const ownRepos = repos.filter((r: any) => !r.fork)
+
+    // Compute streaks from contribution data
+    const contributions = rawData.contributions || {}
+    let currentStreak = 0
+    let longestStreak = 0
+    let tempStreak = 0
+    const sortedDates = Object.keys(contributions).sort()
+    for (const date of sortedDates) {
+      if (contributions[date] > 0) {
+        tempStreak++
+        if (tempStreak > longestStreak) longestStreak = tempStreak
+      } else {
+        tempStreak = 0
+      }
+    }
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const checkDate = contributions[today] > 0 ? today : yesterday
+    if (contributions[checkDate] > 0) {
+      const d = new Date(checkDate + 'T00:00:00')
+      while (contributions[d.toISOString().slice(0, 10)] > 0) {
+        currentStreak++
+        d.setDate(d.getDate() - 1)
+      }
+    }
+
+    return {
+      public_repos: user.public_repos || 0,
+      own_repos: ownRepos.length,
+      followers: user.followers || 0,
+      following: user.following || 0,
+      total_stars: totalStars,
+      total_forks: totalForks,
+      languages,
+      top_repos: ownRepos.slice(0, 6).map((r: any) => ({
+        name: r.name,
+        description: r.description || '',
+        language: r.language || '',
+        stars: r.stargazers_count || 0,
+        forks: r.forks_count || 0,
+        updated: r.updated_at,
+      })),
+      total_commits: gql.total_commits || 0,
+      total_prs: gql.total_prs || 0,
+      total_issues: gql.total_issues || 0,
+      total_contributions_year: gql.total_contributions_year || 0,
+      current_streak: currentStreak,
+      longest_streak: longestStreak,
+      bio: user.bio || '',
+      avatar_url: user.avatar_url || '',
+      created_at: user.created_at,
+    }
+  }
+
   return {}
 }
 
@@ -260,94 +441,110 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Process a single profile: fetch, extract stats, save
+async function processProfile(
+  supabase: any,
+  profile: { lead_id: string; platform: string; username: string },
+): Promise<{ ok: boolean; msg: string }> {
+  const { lead_id, platform, username } = profile
+  try {
+    let rawData = null
+    if (platform === 'leetcode') rawData = await fetchLeetCode(username)
+    else if (platform === 'codeforces') rawData = await fetchCodeforces(username)
+    else if (platform === 'github') rawData = await fetchGitHub(username)
+    else return { ok: false, msg: `[SKIP] ${platform}/${username}: unsupported` }
+
+    if (!rawData) return { ok: false, msg: `[SKIP] ${platform}/${username}: no data` }
+
+    const stats = extractStats(platform, rawData)
+    if (!stats) return { ok: false, msg: `[SKIP] ${platform}/${username}: stats extraction failed` }
+
+    const score = platform === 'leetcode'
+      ? calculateLeetCodeScore(rawData)
+      : platform === 'codeforces'
+      ? calculateCodeforcesScore(rawData)
+      : 0
+
+    const { error: upsertError } = await supabase
+      .from('coding_profiles')
+      .update({ score, stats, raw_json: rawData, fetched_at: new Date().toISOString() })
+      .eq('lead_id', lead_id)
+      .eq('platform', platform)
+
+    if (upsertError) return { ok: false, msg: `[ERR] ${platform}/${username}: ${upsertError.message}` }
+    return { ok: true, msg: `[OK] ${platform}/${username}` }
+  } catch (err) {
+    return { ok: false, msg: `[ERR] ${platform}/${username}: ${(err as Error).message}` }
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   const startTime = Date.now()
+  const TIME_BUDGET_MS = 50_000 // stop after 50s to stay within edge function limits
   const log: string[] = []
 
   try {
-    // Use service role key for full DB access
+    const body = await req.json().catch(() => ({}))
+    const filterPlatform: string | undefined = body.platform // optional: 'leetcode' | 'codeforces' | 'github'
+    const batchSize: number = body.batch_size || 10 // how many to process per call
+    const offset: number = body.offset || 0
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // Load all profiles that have usernames
-    const { data: profiles, error } = await supabase
+    // Load profiles with optional platform filter
+    let query = supabase
       .from('coding_profiles')
       .select('lead_id, platform, username')
       .not('username', 'is', null)
       .neq('username', '')
 
+    if (filterPlatform) query = query.eq('platform', filterPlatform)
+
+    const { data: allProfiles, error } = await query
     if (error) throw new Error(`Load profiles: ${error.message}`)
 
-    const total = (profiles || []).length
-    log.push(`Found ${total} profiles to refresh`)
+    const profiles = (allProfiles || []).slice(offset, offset + batchSize)
+    const totalAll = (allProfiles || []).length
+    log.push(`Found ${totalAll} total, processing batch of ${profiles.length} (offset=${offset})`)
 
     let updated = 0
     let failed = 0
 
-    for (const profile of (profiles || [])) {
-      const { lead_id, platform, username } = profile
+    // Process in groups of 3 concurrently
+    const CONCURRENCY = 3
+    for (let i = 0; i < profiles.length; i += CONCURRENCY) {
+      if (Date.now() - startTime > TIME_BUDGET_MS) {
+        log.push(`[TIMEOUT] Stopped after ${((Date.now() - startTime) / 1000).toFixed(1)}s`)
+        break
+      }
 
-      try {
-        let rawData = null
+      const batch = profiles.slice(i, i + CONCURRENCY)
+      const results = await Promise.all(batch.map(p => processProfile(supabase, p)))
 
-        if (platform === 'leetcode') {
-          rawData = await fetchLeetCode(username)
-        } else if (platform === 'codeforces') {
-          rawData = await fetchCodeforces(username)
-        } else {
-          continue // skip non-scored platforms
-        }
-
-        if (!rawData) {
-          log.push(`[SKIP] ${platform}/${username}: no data`)
-          failed++
-          continue
-        }
-
-        const stats = extractStats(platform, rawData)
-        if (!stats) {
-          log.push(`[SKIP] ${platform}/${username}: stats extraction failed`)
-          failed++
-          continue
-        }
-
-        const score = platform === 'leetcode'
-          ? calculateLeetCodeScore(rawData)
-          : calculateCodeforcesScore(rawData)
-
-        const { error: upsertError } = await supabase
-          .from('coding_profiles')
-          .update({
-            score,
-            stats,
-            raw_json: rawData,
-            fetched_at: new Date().toISOString(),
-          })
-          .eq('lead_id', lead_id)
-          .eq('platform', platform)
-
-        if (upsertError) {
-          log.push(`[ERR] ${platform}/${username}: ${upsertError.message}`)
-          failed++
-        } else {
-          updated++
-        }
-
-        // Rate limit: small delay between requests
-        await new Promise(r => setTimeout(r, 500))
-      } catch (err) {
-        log.push(`[ERR] ${platform}/${username}: ${(err as Error).message}`)
-        failed++
+      for (const r of results) {
+        if (r.ok) updated++
+        else { failed++; log.push(r.msg) }
       }
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    const summary = { total, updated, failed, elapsed_seconds: elapsed, log }
+    const hasMore = offset + batchSize < totalAll
+    const summary = {
+      total: totalAll,
+      processed: profiles.length,
+      updated,
+      failed,
+      offset,
+      next_offset: hasMore ? offset + batchSize : null,
+      elapsed_seconds: elapsed,
+      log,
+    }
 
     return new Response(JSON.stringify(summary), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

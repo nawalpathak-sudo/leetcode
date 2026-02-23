@@ -155,22 +155,21 @@ export async function fetchGitHubContributions(username) {
 
 export async function fetchGitHubData(username) {
   try {
-    const headers = { 'Accept': 'application/vnd.github.v3+json' }
-
-    const [userRes, reposRes, eventsRes, contributions] = await Promise.all([
-      fetch(`https://api.github.com/users/${username}`, { headers }),
-      fetch(`https://api.github.com/users/${username}/repos?per_page=100&sort=updated`, { headers }),
-      fetch(`https://api.github.com/users/${username}/events/public?per_page=100`, { headers }),
-      fetchGitHubContributions(username),
-    ])
-
-    if (!userRes.ok) return null
-
-    const user = await userRes.json()
-    const repos = reposRes.ok ? await reposRes.json() : []
-    const events = eventsRes.ok ? await eventsRes.json() : []
-
-    return { user, repos, events, contributions }
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/quick-function`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ githubFull: username }),
+    })
+    if (!response.ok) {
+      console.error(`GitHub edge fn error: ${response.status}`)
+      return null
+    }
+    const json = await response.json()
+    if (!json.user) return null
+    return json
   } catch (err) {
     console.error('GitHub fetch error:', err)
     return null

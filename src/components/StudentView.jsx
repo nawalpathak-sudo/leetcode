@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Search, User, MapPin, Trophy, Target, Award, Clock, Code, Star, Filter, X, Zap, CalendarDays, TrendingUp } from 'lucide-react'
+import { Search, User, MapPin, Trophy, Target, Award, Clock, Code, Star, Filter, X, Zap, CalendarDays, TrendingUp, GitCommitHorizontal, GitFork, Flame, GitPullRequest, FolderGit2 } from 'lucide-react'
 import { loadAllProfiles, loadProfile, searchProfiles } from '../lib/db'
 import { calculateLeetCodeScore, calculateCodeforcesScore } from '../lib/scoring'
 import { computeRecentActivity, aggregateActivity, activeStudentCounts } from '../lib/activity'
@@ -132,6 +132,8 @@ function BatchDashboard({ platform, platformName, adminUser }) {
         </div>
       ) : platform === 'leetcode' ? (
         <LCBatchCharts data={filtered} platform={platform} platformName={platformName} />
+      ) : platform === 'github' ? (
+        <GHBatchCharts data={filtered} platform={platform} platformName={platformName} />
       ) : (
         <CFBatchCharts data={filtered} platform={platform} platformName={platformName} />
       )}
@@ -515,6 +517,272 @@ function CFBatchCharts({ data, platform, platformName }) {
   )
 }
 
+// ---- GitHub Batch ----
+
+function GHBatchCharts({ data, platform, platformName }) {
+  const [modalProfile, setModalProfile] = useState(null)
+  const [modalLoading, setModalLoading] = useState(false)
+  const { sortKey, sortDir, toggle, sortFn } = useSortable('total_commits', 'desc')
+
+  const openProfile = async (username) => {
+    setModalLoading(true)
+    const full = await loadProfile(platform, username)
+    setModalLoading(false)
+    if (full?.raw_json) setModalProfile(full)
+  }
+
+  // Language aggregation across all students
+  const langTotals = {}
+  for (const p of data) {
+    for (const l of (p.languages || [])) {
+      langTotals[l.name] = (langTotals[l.name] || 0) + l.count
+    }
+  }
+  const topLangs = Object.entries(langTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([name, Repos]) => ({ name, Repos }))
+
+  // Contribution buckets
+  const buckets = makeBuckets(data, 'total_contributions_year', [
+    { label: '500+', min: 500, max: Infinity },
+    { label: '200-499', min: 200, max: 500 },
+    { label: '100-199', min: 100, max: 200 },
+    { label: '50-99', min: 50, max: 100 },
+    { label: '< 50', min: 0, max: 50 },
+  ])
+
+  return (
+    <div className="space-y-6">
+      {modalProfile && (
+        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'GitHub'}>
+          <GHProfile data={modalProfile.raw_json} />
+        </ProfileModal>
+      )}
+      {modalLoading && <ModalLoader />}
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <KPI label="Students" value={data.length} />
+        <KPI label="Avg Repos" value={avg(data, 'own_repos').toFixed(1)} />
+        <KPI label="Avg Commits" value={avg(data, 'total_commits').toFixed(1)} accent />
+        <KPI label="Avg Contributions (Year)" value={avg(data, 'total_contributions_year').toFixed(0)} accent />
+        <KPI label="Avg Streak" value={avg(data, 'longest_streak').toFixed(1)} />
+      </div>
+
+      {/* Contributions bucket */}
+      <ChartCard title="Students by Contributions (Past Year)">
+        <div className="grid md:grid-cols-2 gap-6">
+          <BucketBar data={buckets} />
+          <BucketPie data={buckets} />
+        </div>
+      </ChartCard>
+
+      {/* Top Languages */}
+      {topLangs.length > 0 && (
+        <ChartCard title="Most Used Languages (All Students)">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={topLangs} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+              <XAxis type="number" stroke="#0D1E56" />
+              <YAxis dataKey="name" type="category" stroke="#0D1E56" fontSize={12} width={120} />
+              <Tooltip contentStyle={CHART_TOOLTIP} />
+              <Bar dataKey="Repos" fill="#3BC3E2" label={{ position: 'right', fill: '#0D1E56', fontSize: 12 }} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      )}
+
+      {/* Commits per student */}
+      <ChartCard title="Commits per Student (Past Year)">
+        <ResponsiveContainer width="100%" height={350}>
+          <BarChart data={sortFn(data).map(p => ({ name: p.student_name || p.username, Commits: p.total_commits || 0 }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+            <XAxis dataKey="name" stroke="#0D1E56" fontSize={11} angle={-45} textAnchor="end" height={80} />
+            <YAxis stroke="#0D1E56" />
+            <Tooltip contentStyle={CHART_TOOLTIP} />
+            <Bar dataKey="Commits" fill="#0D1E56" label={{ position: 'top', fill: '#0D1E56', fontSize: 12 }} />
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      {/* Full table */}
+      <ChartCard title="All Students">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-primary/10">
+                <SortTh label="Name" field="student_name" sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+                <SortTh label="Username" field="username" sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+                <SortTh label="College" field="college" sortKey={sortKey} sortDir={sortDir} onSort={toggle} />
+                <SortTh label="Repos" field="own_repos" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="Commits" field="total_commits" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="PRs" field="total_prs" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="Stars" field="total_stars" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="Followers" field="followers" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="Streak" field="longest_streak" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+                <SortTh label="Year" field="total_contributions_year" sortKey={sortKey} sortDir={sortDir} onSort={toggle} align="right" />
+              </tr>
+            </thead>
+            <tbody>
+              {sortFn(data).map((p, i) => (
+                <tr key={p.username} className={`border-b border-primary/5 ${i < 3 ? 'bg-ambient/5' : ''} hover:bg-ambient/10 cursor-pointer transition-colors`}
+                  onClick={() => openProfile(p.username)}>
+                  <td className="py-1.5 text-dark-ambient font-medium underline decoration-ambient/30">{p.student_name || p.username}</td>
+                  <td className="py-1.5 text-dark-ambient">{p.username}</td>
+                  <td className="py-1.5">{p.college}</td>
+                  <td className="py-1.5 text-right">{p.own_repos || 0}</td>
+                  <td className="py-1.5 text-right font-semibold">{p.total_commits || 0}</td>
+                  <td className="py-1.5 text-right">{p.total_prs || 0}</td>
+                  <td className="py-1.5 text-right">{p.total_stars || 0}</td>
+                  <td className="py-1.5 text-right">{p.followers || 0}</td>
+                  <td className="py-1.5 text-right">{p.longest_streak || 0}</td>
+                  <td className="py-1.5 text-right font-bold text-primary">{p.total_contributions_year || 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </ChartCard>
+    </div>
+  )
+}
+
+// ---- GitHub Profile ----
+
+function GHProfile({ data }) {
+  const user = data.user || {}
+  const repos = (data.repos || []).filter(r => !r.fork)
+  const gql = data.graphql_stats || {}
+
+  const langMap = {}
+  let totalStars = 0
+  let totalForks = 0
+  for (const r of repos) {
+    if (r.language) langMap[r.language] = (langMap[r.language] || 0) + 1
+    totalStars += r.stargazers_count || 0
+    totalForks += r.forks_count || 0
+  }
+  const topLangs = Object.entries(langMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, value]) => ({ name, value }))
+
+  // Streaks from contributions
+  const contributions = data.contributions || {}
+  let currentStreak = 0
+  let longestStreak = 0
+  let tempStreak = 0
+  const sortedDates = Object.keys(contributions).sort()
+  for (const date of sortedDates) {
+    if (contributions[date] > 0) {
+      tempStreak++
+      if (tempStreak > longestStreak) longestStreak = tempStreak
+    } else {
+      tempStreak = 0
+    }
+  }
+  const today = new Date().toISOString().slice(0, 10)
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+  const checkDate = contributions[today] > 0 ? today : yesterday
+  if (contributions[checkDate] > 0) {
+    const d = new Date(checkDate + 'T00:00:00')
+    while (contributions[d.toISOString().slice(0, 10)] > 0) {
+      currentStreak++
+      d.setDate(d.getDate() - 1)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="bg-primary rounded-xl p-6 flex gap-6 items-center text-white">
+        {user.avatar_url && (
+          <img src={user.avatar_url} alt="" className="w-20 h-20 rounded-full border-2 border-ambient" />
+        )}
+        <div>
+          <h2 className="text-2xl font-bold">{user.login || 'Unknown'}</h2>
+          {user.name && <p className="text-white/70">{user.name}</p>}
+          {user.bio && <p className="text-white/50 text-sm mt-1">{user.bio}</p>}
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KPI label="Commits (Year)" value={gql.total_commits || 0} accent />
+        <KPI label="Repositories" value={repos.length} />
+        <KPI label="Stars" value={totalStars} accent />
+        <KPI label="Followers" value={user.followers || 0} />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KPI label="Pull Requests" value={gql.total_prs || 0} />
+        <KPI label="Forks" value={totalForks} />
+        <KPI label="Current Streak" value={`${currentStreak}d`} accent />
+        <KPI label="Longest Streak" value={`${longestStreak}d`} />
+      </div>
+
+      {gql.total_contributions_year > 0 && (
+        <div className="bg-ambient/10 border border-ambient/30 rounded-xl px-6 py-3 text-center">
+          <span className="text-2xl font-bold text-dark-ambient">{gql.total_contributions_year}</span>
+          <span className="text-primary/60 ml-2">contributions in the past year</span>
+        </div>
+      )}
+
+      {/* Languages */}
+      {topLangs.length > 0 && (
+        <ChartCard title="Languages">
+          <div className="grid md:grid-cols-2 gap-6">
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={topLangs}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                <XAxis dataKey="name" stroke="#0D1E56" fontSize={12} />
+                <YAxis stroke="#0D1E56" />
+                <Tooltip contentStyle={CHART_TOOLTIP} />
+                <Bar dataKey="value" name="Repos" fill="#3BC3E2" label={{ position: 'top', fill: '#0D1E56', fontSize: 12 }} />
+              </BarChart>
+            </ResponsiveContainer>
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie data={topLangs} cx="50%" cy="50%" innerRadius={50} outerRadius={90} dataKey="value"
+                  label={({ name, value }) => `${name}: ${value}`}>
+                  {topLangs.map((_, i) => <Cell key={i} fill={BUCKET_COLORS[i % BUCKET_COLORS.length]} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </ChartCard>
+      )}
+
+      {/* Top Repos */}
+      {repos.length > 0 && (
+        <ChartCard title="Top Repositories">
+          <div className="grid sm:grid-cols-2 gap-3">
+            {repos.slice(0, 6).map(r => (
+              <div key={r.name} className="border border-primary/10 rounded-lg p-4 hover:bg-ambient/5 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="font-medium text-primary text-sm">{r.name}</div>
+                  <div className="flex items-center gap-2 text-xs text-primary/40">
+                    {(r.stargazers_count > 0) && <span className="flex items-center gap-0.5"><Star size={12} /> {r.stargazers_count}</span>}
+                    {(r.forks_count > 0) && <span className="flex items-center gap-0.5"><GitFork size={12} /> {r.forks_count}</span>}
+                  </div>
+                </div>
+                {r.description && <p className="text-xs text-primary/50 mt-1 line-clamp-2">{r.description}</p>}
+                {r.language && (
+                  <span className="inline-block mt-2 text-xs bg-primary/5 text-primary/60 px-2 py-0.5 rounded">{r.language}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </ChartCard>
+      )}
+
+      {/* Contribution Heatmap */}
+      <SubmissionHeatmap rawJson={data} platform="github" color="#333333" platformName="GitHub" />
+    </div>
+  )
+}
+
 // ============================================================
 // PROFILE LOOKUP
 // ============================================================
@@ -616,6 +884,7 @@ function ProfileLookup({ platform, platformName, adminUser }) {
 
       {selectedProfile?.raw_json && platform === 'leetcode' && <LCProfile data={selectedProfile.raw_json} />}
       {selectedProfile?.raw_json && platform === 'codeforces' && <CFProfile data={selectedProfile.raw_json} />}
+      {selectedProfile?.raw_json && platform === 'github' && <GHProfile data={selectedProfile.raw_json} />}
     </div>
   )
 }

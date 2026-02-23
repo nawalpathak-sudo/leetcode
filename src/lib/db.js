@@ -142,6 +142,7 @@ function extractStats(platform, rawData) {
     const user = rawData.user
     const repos = rawData.repos || []
     const events = rawData.events || []
+    const gql = rawData.graphql_stats || {}
 
     // Language breakdown from repos
     const langMap = {}
@@ -155,17 +156,43 @@ function extractStats(platform, rawData) {
     }
     const languages = Object.entries(langMap).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }))
 
-    // Recent activity from events
+    // Recent activity from events (legacy fallback)
     const pushDays = new Set()
-    let totalCommits = 0
+    let recentCommits = 0
     for (const e of events) {
       if (e.type === 'PushEvent') {
         pushDays.add(e.created_at?.slice(0, 10))
-        totalCommits += e.payload?.commits?.length || 0
+        recentCommits += e.payload?.commits?.length || 0
       }
     }
 
     const ownRepos = repos.filter(r => !r.fork)
+
+    // Compute streaks from contribution data
+    const contributions = rawData.contributions || {}
+    let currentStreak = 0
+    let longestStreak = 0
+    let tempStreak = 0
+    const sortedDates = Object.keys(contributions).sort()
+    for (const date of sortedDates) {
+      if (contributions[date] > 0) {
+        tempStreak++
+        if (tempStreak > longestStreak) longestStreak = tempStreak
+      } else {
+        tempStreak = 0
+      }
+    }
+    // Current streak: count backwards from today
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const checkDate = contributions[today] > 0 ? today : yesterday
+    if (contributions[checkDate] > 0) {
+      const d = new Date(checkDate + 'T00:00:00')
+      while (contributions[d.toISOString().slice(0, 10)] > 0) {
+        currentStreak++
+        d.setDate(d.getDate() - 1)
+      }
+    }
 
     return {
       public_repos: user.public_repos || 0,
@@ -183,11 +210,19 @@ function extractStats(platform, rawData) {
         forks: r.forks_count || 0,
         updated: r.updated_at,
       })),
+      // Legacy fields
       recent_push_days: pushDays.size,
-      recent_commits: totalCommits,
+      recent_commits: recentCommits,
+      // Accurate metrics from GraphQL (fallback to events data)
+      total_commits: gql.total_commits || recentCommits,
+      total_prs: gql.total_prs || 0,
+      total_issues: gql.total_issues || 0,
+      total_contributions_year: gql.total_contributions_year || 0,
+      current_streak: currentStreak,
+      longest_streak: longestStreak,
       bio: user.bio || '',
-      avatar_url: user.avatar_url || '',
-      created_at: user.created_at,
+      avatar_url: user.avatar_url || user.avatarUrl || '',
+      created_at: user.created_at || user.createdAt,
     }
   }
 

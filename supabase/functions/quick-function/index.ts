@@ -1,6 +1,50 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 
 const LEETCODE_GRAPHQL_URL = 'https://leetcode.com/graphql'
+const GITHUB_GRAPHQL_URL = 'https://api.github.com/graphql'
+
+const GITHUB_QUERY = `
+query($username: String!) {
+  user(login: $username) {
+    login
+    name
+    bio
+    avatarUrl
+    createdAt
+    followers { totalCount }
+    following { totalCount }
+    repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        name
+        description
+        url
+        isFork
+        stargazerCount
+        forkCount
+        primaryLanguage { name }
+        updatedAt
+      }
+    }
+    contributionsCollection {
+      totalCommitContributions
+      totalPullRequestContributions
+      totalIssueContributions
+      totalRepositoryContributions
+      restrictedContributionsCount
+      contributionCalendar {
+        totalContributions
+        weeks {
+          contributionDays {
+            date
+            contributionCount
+          }
+        }
+      }
+    }
+  }
+}
+`
 
 // Fetch problem details by titleSlug
 const PROBLEM_QUERY = `
@@ -131,9 +175,116 @@ serve(async (req) => {
 
   try {
     const body = await req.json()
-    const { username, titleSlug, githubUsername } = body
+    const { username, titleSlug, githubUsername, githubFull } = body
 
-    // GitHub contributions endpoint
+    // GitHub full profile via GraphQL API
+    if (githubFull) {
+      const ghToken = Deno.env.get('GITHUB_TOKEN')
+
+      if (ghToken) {
+        // GraphQL path: accurate commits, contributions calendar, repos
+        const ghRes = await fetchWithRetry(GITHUB_GRAPHQL_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': `bearer ${ghToken}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'AlgoArena-Bot',
+          },
+          body: JSON.stringify({ query: GITHUB_QUERY, variables: { username: githubFull } }),
+        })
+
+        const ghJson = await ghRes.json()
+        const ghUser = ghJson.data?.user
+        if (!ghUser) {
+          return new Response(JSON.stringify({ error: 'GitHub user not found' }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          })
+        }
+
+        const repos = (ghUser.repositories.nodes || []).map((r: any) => ({
+          name: r.name,
+          description: r.description,
+          fork: r.isFork,
+          stargazers_count: r.stargazerCount,
+          forks_count: r.forkCount,
+          language: r.primaryLanguage?.name || null,
+          updated_at: r.updatedAt,
+        }))
+
+        const contributions: Record<string, number> = {}
+        for (const week of ghUser.contributionsCollection.contributionCalendar.weeks) {
+          for (const day of week.contributionDays) {
+            contributions[day.date] = day.contributionCount
+          }
+        }
+
+        return new Response(JSON.stringify({
+          user: {
+            login: ghUser.login,
+            name: ghUser.name,
+            bio: ghUser.bio,
+            avatar_url: ghUser.avatarUrl,
+            created_at: ghUser.createdAt,
+            public_repos: ghUser.repositories.totalCount,
+            followers: ghUser.followers.totalCount,
+            following: ghUser.following.totalCount,
+          },
+          repos,
+          events: [],
+          contributions,
+          graphql_stats: {
+            total_commits: ghUser.contributionsCollection.totalCommitContributions + ghUser.contributionsCollection.restrictedContributionsCount,
+            total_prs: ghUser.contributionsCollection.totalPullRequestContributions,
+            total_issues: ghUser.contributionsCollection.totalIssueContributions,
+            total_repos_contributed: ghUser.contributionsCollection.totalRepositoryContributions,
+            total_contributions_year: ghUser.contributionsCollection.contributionCalendar.totalContributions,
+          },
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      // Fallback: REST API from edge function (no token configured)
+      const ghHeaders = { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'AlgoArena-Bot' }
+      const [userRes, reposRes, contribRes] = await Promise.all([
+        fetchWithRetry(`https://api.github.com/users/${encodeURIComponent(githubFull)}`, { headers: ghHeaders }),
+        fetchWithRetry(`https://api.github.com/users/${encodeURIComponent(githubFull)}/repos?per_page=100&sort=updated`, { headers: ghHeaders }),
+        fetchWithRetry(`https://github.com/users/${encodeURIComponent(githubFull)}/contributions`, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html' },
+        }),
+      ])
+
+      if (!userRes.ok) {
+        return new Response(JSON.stringify({ error: 'GitHub user not found' }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const user = await userRes.json()
+      const repos = reposRes.ok ? await reposRes.json() : []
+
+      // Parse contributions from HTML
+      const html = await contribRes.text()
+      const contributions: Record<string, number> = {}
+      const cellRegex = /data-date="(\d{4}-\d{2}-\d{2})"[^>]*data-level="(\d)"/g
+      let match
+      while ((match = cellRegex.exec(html)) !== null) {
+        const date = match[1]
+        const level = parseInt(match[2])
+        if (level === 0) { contributions[date] = 0; continue }
+        const ahead = html.substring(match.index, match.index + 500)
+        const countMatch = ahead.match(/(\d+)\s+contributions?/)
+        contributions[date] = countMatch ? parseInt(countMatch[1]) : level
+      }
+
+      return new Response(JSON.stringify({ user, repos, events: [], contributions }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GitHub contributions-only endpoint (legacy)
     if (githubUsername) {
       const res = await fetchWithRetry(
         `https://github.com/users/${encodeURIComponent(githubUsername)}/contributions`,

@@ -51,6 +51,18 @@ export function computeRecentActivity(rawJson, platform) {
     }
   }
 
+  if (platform === 'github') {
+    const contributions = rawJson?.contributions || {}
+    for (const [dateStr, count] of Object.entries(contributions)) {
+      if (!count) continue
+      const day = startOfDayUTC(new Date(dateStr + 'T00:00:00'))
+      const diff = daysBetween(day, now)
+      if (diff === 0) result.today += count
+      if (diff >= 0 && diff < 7) result.last7 += count
+      if (diff >= 0 && diff < 30) result.last30 += count
+    }
+  }
+
   return result
 }
 

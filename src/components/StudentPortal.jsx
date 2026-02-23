@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight } from 'lucide-react'
+import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight, GitCommitHorizontal, Flame, GitPullRequest } from 'lucide-react'
 import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, updateStudentEmail, sendOtp, verifyOtp } from '../lib/db'
 import { cleanPlatformUsername, fetchGitHubData, fetchGitHubContributions } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
@@ -880,9 +880,9 @@ export function GitHubStats({ stats, username }) {
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
+          { icon: <GitCommitHorizontal size={16} />, label: 'Commits', value: stats.total_commits || stats.recent_commits || 0, color: 'text-green-600' },
           { icon: <Code2 size={16} />, label: 'Repos', value: stats.own_repos, color: 'text-primary' },
           { icon: <Star size={16} />, label: 'Stars', value: stats.total_stars, color: 'text-amber-500' },
-          { icon: <GitFork size={16} />, label: 'Forks', value: stats.total_forks, color: 'text-blue-500' },
           { icon: <Users size={16} />, label: 'Followers', value: stats.followers, color: 'text-purple-500' },
         ].map(item => (
           <div key={item.label} className="bg-gray-50 rounded-xl px-4 py-3 text-center">
@@ -895,15 +895,57 @@ export function GitHubStats({ stats, username }) {
         ))}
       </div>
 
-      {/* Recent activity */}
-      {(stats.recent_commits > 0 || stats.recent_push_days > 0) && (
+      {/* Secondary stats: PRs, Forks, Streaks */}
+      {(stats.total_prs > 0 || stats.total_forks > 0 || stats.current_streak > 0 || stats.longest_streak > 0) && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {stats.total_prs > 0 && (
+            <div className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-purple-500 mb-1">
+                <GitPullRequest size={16} />
+                <span className="text-xs font-medium text-primary/50">Pull Requests</span>
+              </div>
+              <div className="text-lg font-bold text-primary">{stats.total_prs}</div>
+            </div>
+          )}
+          {stats.total_forks > 0 && (
+            <div className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-blue-500 mb-1">
+                <GitFork size={16} />
+                <span className="text-xs font-medium text-primary/50">Forks</span>
+              </div>
+              <div className="text-lg font-bold text-primary">{stats.total_forks}</div>
+            </div>
+          )}
+          {stats.current_streak > 0 && (
+            <div className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-orange-500 mb-1">
+                <Flame size={16} />
+                <span className="text-xs font-medium text-primary/50">Current Streak</span>
+              </div>
+              <div className="text-lg font-bold text-orange-600">{stats.current_streak}d</div>
+            </div>
+          )}
+          {stats.longest_streak > 0 && (
+            <div className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-amber-500 mb-1">
+                <Trophy size={16} />
+                <span className="text-xs font-medium text-primary/50">Max Streak</span>
+              </div>
+              <div className="text-lg font-bold text-primary">{stats.longest_streak}d</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Contributions summary */}
+      {stats.total_contributions_year > 0 && (
         <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex items-center gap-3">
           <Calendar size={18} className="text-green-600 shrink-0" />
           <div>
             <div className="text-sm font-medium text-green-800">
-              {stats.recent_commits} commit{stats.recent_commits !== 1 ? 's' : ''} across {stats.recent_push_days} day{stats.recent_push_days !== 1 ? 's' : ''}
+              {stats.total_contributions_year} contribution{stats.total_contributions_year !== 1 ? 's' : ''} in the past year
             </div>
-            <div className="text-xs text-green-600/70">Recent public activity</div>
+            <div className="text-xs text-green-600/70">Commits, PRs, issues, and reviews</div>
           </div>
         </div>
       )}

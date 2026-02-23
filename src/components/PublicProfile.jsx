@@ -252,6 +252,11 @@ export default function PublicProfile() {
           return <SubmissionHeatmap key={`hm-${plat}`} rawJson={prof.raw_json} platform={plat} color={platInfo.color} platformName={platInfo.name} />
         })}
 
+        {/* GitHub Contribution Heatmap */}
+        {profileMap.github?.raw_json?.contributions && (
+          <SubmissionHeatmap rawJson={profileMap.github.raw_json} platform="github" color="#333333" platformName="GitHub" />
+        )}
+
         {/* GitHub Analytics */}
         {profileMap.github?.stats && (
           <GitHubStats stats={profileMap.github.stats} username={profileMap.github.username} />
