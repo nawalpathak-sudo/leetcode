@@ -272,24 +272,26 @@ function AuthScreen({ onSuccess }) {
       setError('Please enter a valid 10-digit mobile number.')
       setLoading(false); return
     }
-    // Fire student lookup and OTP send in parallel to cut latency
-    const [student, result] = await Promise.all([
-      getStudentByPhone(formatted),
-      sendOtp(formatted),
-    ])
-    if (!student) {
-      setError('No account found with this number. Please sign up first.')
-      setLoading(false); return
-    }
-    setFoundStudent(student)
+    // Fire OTP immediately, don't block UI on student lookup
+    const studentPromise = getStudentByPhone(formatted)
+    const result = await sendOtp(formatted)
     if (!result?.success) {
       setError(result?.error || 'Failed to send OTP. Please try again.')
       setLoading(false); return
     }
+    // OTP sent — show entry screen instantly
     setPhone(formatted)
     setStep(2)
     startResendTimer()
     setLoading(false)
+    // Resolve student lookup in background
+    const student = await studentPromise
+    if (!student) {
+      setStep(1)
+      setError('No account found with this number. Please sign up first.')
+      return
+    }
+    setFoundStudent(student)
   }
 
   const handleLoginVerify = async (e) => {
