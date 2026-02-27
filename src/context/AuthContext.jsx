@@ -21,6 +21,9 @@ export function AuthProvider({ children }) {
         getStudent(lead_id).then(s => {
           if (s) setStudent(s)
           else localStorage.removeItem('alta_session')
+        }).catch(() => {
+          localStorage.removeItem('alta_session')
+        }).finally(() => {
           setLoading(false)
         })
       } catch {

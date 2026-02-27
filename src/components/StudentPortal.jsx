@@ -259,18 +259,23 @@ function AuthScreen({ onSuccess }) {
     e.preventDefault()
     if (otp.length !== 6) return
     setLoading(true); setError('')
-    const result = await verifyOtp(phone, otp)
-    if (!result?.success) {
-      setError('Invalid or expired OTP. Please try again.')
-      setLoading(false); return
+    try {
+      const result = await verifyOtp(phone, otp)
+      if (!result?.success) {
+        setError(result?.error || 'Invalid or expired OTP. Please try again.')
+        setLoading(false); return
+      }
+      await updateStudentPhone(foundStudent.lead_id, phone)
+      if (signupMethod === 'leadid' && !foundStudent.email && email.trim()) {
+        await updateStudentEmail(foundStudent.lead_id, email.trim().toLowerCase())
+      }
+      const updated = await getStudent(foundStudent.lead_id)
+      onSuccess(updated)
+    } catch {
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setLoading(false)
     }
-    await updateStudentPhone(foundStudent.lead_id, phone)
-    if (signupMethod === 'leadid' && !foundStudent.email && email.trim()) {
-      await updateStudentEmail(foundStudent.lead_id, email.trim().toLowerCase())
-    }
-    const updated = await getStudent(foundStudent.lead_id)
-    onSuccess(updated)
-    setLoading(false)
   }
 
   // ---- Login handlers ----
@@ -314,22 +319,27 @@ function AuthScreen({ onSuccess }) {
     e.preventDefault()
     if (otp.length !== 6) return
     setLoading(true); setError('')
-    // Fire verify + resolve student in parallel
-    const [result, resolvedStudent] = await Promise.all([
-      verifyOtp(phone, otp),
-      foundStudent ? Promise.resolve(foundStudent) : studentPromiseRef.current,
-    ])
-    if (!result?.success) {
-      setError('Invalid or expired OTP. Please try again.')
-      setLoading(false); return
+    try {
+      // Fire verify + resolve student in parallel
+      const [result, resolvedStudent] = await Promise.all([
+        verifyOtp(phone, otp),
+        foundStudent ? Promise.resolve(foundStudent) : (studentPromiseRef.current || Promise.resolve(null)),
+      ])
+      if (!result?.success) {
+        setError(result?.error || 'Invalid or expired OTP. Please try again.')
+        setLoading(false); return
+      }
+      if (!resolvedStudent) {
+        setError('No account found with this number. Please sign up first.')
+        setStep(1); setLoading(false); return
+      }
+      // Don't wait for prefetch — pass the promise, dashboard will handle it
+      onSuccess(resolvedStudent, prefetchedDataRef.current)
+    } catch {
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setLoading(false)
     }
-    if (!resolvedStudent) {
-      setError('No account found with this number. Please sign up first.')
-      setStep(1); setLoading(false); return
-    }
-    // Don't wait for prefetch — pass the promise, dashboard will handle it
-    onSuccess(resolvedStudent, prefetchedDataRef.current)
-    setLoading(false)
   }
 
   const handleResend = async () => {
