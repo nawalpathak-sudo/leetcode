@@ -1,18 +1,27 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Eye, BookOpen, LogOut, Shield, Users, Database, FolderGit2 } from 'lucide-react'
-import AdminPanel from './components/AdminPanel'
-import StudentView from './components/StudentView'
-import HomePage from './components/HomePage'
-import StudentPortal from './components/StudentPortal'
-import PublicProfile from './components/PublicProfile'
-import PracticeAdmin from './components/PracticeAdmin'
-import PracticePage from './components/PracticePage'
-import ProjectHub from './components/ProjectHub'
-import UserManagement from './components/UserManagement'
-import AdminProjects from './components/AdminProjects'
 import { loadPlatforms, getAdminByPhone, getAdminById, sendOtp, verifyOtp } from './lib/db'
 import { AuthProvider } from './context/AuthContext'
+
+const AdminPanel = lazy(() => import('./components/AdminPanel'))
+const StudentView = lazy(() => import('./components/StudentView'))
+const HomePage = lazy(() => import('./components/HomePage'))
+const StudentPortal = lazy(() => import('./components/StudentPortal'))
+const PublicProfile = lazy(() => import('./components/PublicProfile'))
+const PracticeAdmin = lazy(() => import('./components/PracticeAdmin'))
+const PracticePage = lazy(() => import('./components/PracticePage'))
+const ProjectHub = lazy(() => import('./components/ProjectHub'))
+const UserManagement = lazy(() => import('./components/UserManagement'))
+const AdminProjects = lazy(() => import('./components/AdminProjects'))
+
+function PageSpinner() {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="h-10 w-10 animate-spin rounded-full border-4 border-ambient border-r-transparent" />
+    </div>
+  )
+}
 
 const DEFAULT_PLATFORMS = [
   { slug: 'leetcode', display_name: 'LeetCode', base_url: 'https://leetcode.com', active: true },
@@ -398,17 +407,19 @@ function AdminApp() {
         </header>
 
         <div className="p-8 max-w-7xl">
-          {section === 'users' ? (
-            <UserManagement adminUser={adminUser} />
-          ) : section === 'practice' ? (
-            <PracticeAdmin />
-          ) : section === 'data' ? (
-            <AdminPanel platforms={platforms} adminUser={adminUser} />
-          ) : section === 'projects' ? (
-            <AdminProjects adminUser={adminUser} />
-          ) : (
-            <StudentView platform={platform} platformName={platformName} adminUser={adminUser} />
-          )}
+          <Suspense fallback={<div className="flex justify-center py-20"><div className="h-8 w-8 animate-spin rounded-full border-4 border-ambient border-r-transparent" /></div>}>
+            {section === 'users' ? (
+              <UserManagement adminUser={adminUser} />
+            ) : section === 'practice' ? (
+              <PracticeAdmin />
+            ) : section === 'data' ? (
+              <AdminPanel platforms={platforms} adminUser={adminUser} />
+            ) : section === 'projects' ? (
+              <AdminProjects adminUser={adminUser} />
+            ) : (
+              <StudentView platform={platform} platformName={platformName} adminUser={adminUser} />
+            )}
+          </Suspense>
         </div>
       </main>
     </div>
@@ -418,15 +429,17 @@ function AdminApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/portal" element={<StudentPortal />} />
-        <Route path="/admin" element={<AdminApp />} />
-        <Route path="/practice" element={<PracticePage />} />
-        <Route path="/projects" element={<ProjectHub />} />
-        <Route path="/:slug" element={<PublicProfile />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<PageSpinner />}>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/portal" element={<StudentPortal />} />
+          <Route path="/admin" element={<AdminApp />} />
+          <Route path="/practice" element={<PracticePage />} />
+          <Route path="/projects" element={<ProjectHub />} />
+          <Route path="/:slug" element={<PublicProfile />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </AuthProvider>
   )
 }

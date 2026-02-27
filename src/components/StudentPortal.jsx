@@ -43,22 +43,29 @@ export default function StudentPortal() {
     if (!s) { setLoading(false); return null }
     setStudent(s)
 
-    const profs = await getStudentProfiles(leadId)
+    // Fire profiles + all leaderboards in parallel instead of sequentially
+    const [profs, ...leaderboards] = await Promise.all([
+      getStudentProfiles(leadId),
+      ...SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
+    ])
 
+    // GitHub contributions fetch — don't block rendering, fire in background
     const ghProf = profs.find(p => p.platform === 'github')
     if (ghProf?.username && ghProf.raw_json && !ghProf.raw_json.contributions) {
-      const contributions = await fetchGitHubContributions(ghProf.username)
-      if (contributions) {
-        ghProf.raw_json = { ...ghProf.raw_json, contributions }
-        saveProfile(leadId, 'github', ghProf.username, ghProf.raw_json)
-      }
+      fetchGitHubContributions(ghProf.username).then(contributions => {
+        if (contributions) {
+          ghProf.raw_json = { ...ghProf.raw_json, contributions }
+          saveProfile(leadId, 'github', ghProf.username, ghProf.raw_json)
+          setProfiles(prev => prev.map(p => p.platform === 'github' ? { ...p, raw_json: ghProf.raw_json } : p))
+        }
+      })
     }
 
     setProfiles(profs)
 
     const bm = {}
-    for (const plat of SCORED_PLATFORMS) {
-      const all = await loadAllProfiles(plat)
+    SCORED_PLATFORMS.forEach((plat, i) => {
+      const all = leaderboards[i]
       const myProfile = all.find(p => p.lead_id === leadId)
       if (myProfile && all.length > 0) {
         const sameCollege = all.filter(p => p.college && p.college === s.college)
@@ -75,7 +82,7 @@ export default function StudentPortal() {
             : null,
         }
       }
-    }
+    })
     setBenchmarks(bm)
     setLoading(false)
     return s
@@ -106,19 +113,19 @@ export default function StudentPortal() {
   if (screen === 'projects') return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-primary sticky top-0 z-50 shadow-lg">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/alta-white-text.png" alt="ALTA" className="h-7" />
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <img src="/alta-white-text.png" alt="ALTA" className="h-6 sm:h-7" />
             <span className="text-white/30">|</span>
-            <span className="text-white font-medium">ProjectHub</span>
+            <span className="text-white font-medium text-sm sm:text-base">ProjectHub</span>
           </div>
           <button onClick={handleLogout}
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
-            <LogOut size={14} /> Logout
+            className="p-2 sm:px-4 sm:py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
+            <LogOut size={14} /> <span className="hidden sm:inline">Logout</span>
           </button>
         </div>
       </header>
-      <div className="max-w-6xl mx-auto px-6 py-8">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
         <StudentProjectDashboard leadId={student.lead_id} studentName={student.student_name} onBack={() => setScreen('dashboard')} />
       </div>
     </div>
@@ -265,13 +272,16 @@ function AuthScreen({ onSuccess }) {
       setError('Please enter a valid 10-digit mobile number.')
       setLoading(false); return
     }
-    const student = await getStudentByPhone(formatted)
+    // Fire student lookup and OTP send in parallel to cut latency
+    const [student, result] = await Promise.all([
+      getStudentByPhone(formatted),
+      sendOtp(formatted),
+    ])
     if (!student) {
       setError('No account found with this number. Please sign up first.')
       setLoading(false); return
     }
     setFoundStudent(student)
-    const result = await sendOtp(formatted)
     if (!result?.success) {
       setError(result?.error || 'Failed to send OTP. Please try again.')
       setLoading(false); return
@@ -311,15 +321,15 @@ function AuthScreen({ onSuccess }) {
   const Spinner = () => <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-r-transparent" />
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary via-primary to-[#162a6b] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary via-primary to-[#162a6b] flex items-center justify-center p-3 sm:p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <img src="/alta-white-text.png" alt="ALTA" className="h-10 mx-auto mb-4" />
-          <h1 className="text-3xl font-bold text-white mb-2">Student Portal</h1>
-          <p className="text-white/50">Verify via WhatsApp to access your profile</p>
+        <div className="text-center mb-6 sm:mb-8">
+          <img src="/alta-white-text.png" alt="ALTA" className="h-8 sm:h-10 mx-auto mb-3 sm:mb-4" />
+          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Student Portal</h1>
+          <p className="text-white/50 text-sm sm:text-base">Verify via WhatsApp to access your profile</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-2xl p-8">
+        <div className="bg-white rounded-2xl shadow-2xl p-5 sm:p-8">
           {/* Tab switcher */}
           <div className="flex mb-6 bg-primary/5 rounded-xl p-1">
             <button onClick={() => switchMode('login')}
@@ -535,55 +545,55 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
     <div className="min-h-screen bg-gray-50">
       {/* Top Bar */}
       <header className="bg-primary sticky top-0 z-50 shadow-lg">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/alta-white-text.png" alt="ALTA" className="h-7" />
-            <span className="text-white/30">|</span>
-            <span className="text-white font-medium">Student Portal</span>
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <img src="/alta-white-text.png" alt="ALTA" className="h-6 sm:h-7" />
+            <span className="text-white/30 hidden sm:inline">|</span>
+            <span className="text-white font-medium hidden sm:inline">Student Portal</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
             <button onClick={onProjects}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
-              <FolderGit2 size={14} /> My Projects
+              className="p-2 sm:px-4 sm:py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
+              <FolderGit2 size={14} /> <span className="hidden sm:inline">My Projects</span>
             </button>
             <button onClick={onEdit}
-              className="px-4 py-2 bg-ambient hover:bg-dark-ambient text-primary rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
-              <Edit3 size={14} /> Edit Profile
+              className="p-2 sm:px-4 sm:py-2 bg-ambient hover:bg-dark-ambient text-primary rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
+              <Edit3 size={14} /> <span className="hidden sm:inline">Edit Profile</span>
             </button>
             <button onClick={onLogout}
-              className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
-              <LogOut size={14} /> Logout
+              className="p-2 sm:px-4 sm:py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
+              <LogOut size={14} /> <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-4 sm:space-y-8">
         {/* Student Info Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-8">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-3xl font-bold text-primary">{student.student_name || student.lead_id}</h2>
-              <div className="flex flex-wrap gap-4 mt-3 text-sm text-primary/60">
-                {student.college && <span className="flex items-center gap-1.5 bg-primary/5 px-3 py-1 rounded-full">{student.college}</span>}
-                {student.batch && <span className="flex items-center gap-1.5 bg-ambient/10 text-dark-ambient px-3 py-1 rounded-full">{student.batch}</span>}
-                {student.email && <span className="text-primary/40">{student.email}</span>}
+        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h2 className="text-xl sm:text-3xl font-bold text-primary truncate">{student.student_name || student.lead_id}</h2>
+              <div className="flex flex-wrap gap-2 sm:gap-4 mt-2 sm:mt-3 text-xs sm:text-sm text-primary/60">
+                {student.college && <span className="flex items-center gap-1.5 bg-primary/5 px-2 sm:px-3 py-1 rounded-full">{student.college}</span>}
+                {student.batch && <span className="flex items-center gap-1.5 bg-ambient/10 text-dark-ambient px-2 sm:px-3 py-1 rounded-full">{student.batch}</span>}
+                {student.email && <span className="text-primary/40 truncate">{student.email}</span>}
               </div>
             </div>
-            <span className="text-primary/20 text-sm font-mono">{student.lead_id}</span>
+            <span className="text-primary/20 text-xs sm:text-sm font-mono shrink-0">{student.lead_id}</span>
           </div>
 
           {/* Shareable Link */}
-          <div className="mt-5 pt-5 border-t border-primary/10">
+          <div className="mt-4 sm:mt-5 pt-4 sm:pt-5 border-t border-primary/10">
             <div className="flex items-center gap-2 text-sm text-primary/50 mb-2">
               <Link2 size={14} /> Shareable Profile Link
             </div>
             <div className="flex items-center gap-2">
-              <div className="flex-1 bg-primary/5 rounded-lg px-4 py-2.5 text-sm text-primary font-mono truncate">
+              <div className="flex-1 min-w-0 bg-primary/5 rounded-lg px-3 sm:px-4 py-2.5 text-xs sm:text-sm text-primary font-mono truncate">
                 {shareUrl}
               </div>
               <button onClick={handleCopy}
-                className={`px-4 py-2.5 rounded-lg font-medium text-sm flex items-center gap-1.5 transition-all ${
+                className={`shrink-0 px-3 sm:px-4 py-2.5 rounded-lg font-medium text-sm flex items-center gap-1.5 transition-all ${
                   copied
                     ? 'bg-green-100 text-green-700'
                     : 'bg-ambient hover:bg-dark-ambient text-primary'
@@ -596,7 +606,7 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
 
         {/* Platform Scores Overview */}
         {SCORED_PLATFORMS.some(p => benchmarks[p]) && (
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid sm:grid-cols-2 gap-3 sm:gap-6">
             {SCORED_PLATFORMS.map(plat => {
               const bm = benchmarks[plat]
               if (!bm) return null
@@ -659,11 +669,11 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
         )}
 
         {/* All Platform Links */}
-        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-8">
-          <h3 className="text-lg font-bold text-primary mb-4 flex items-center gap-2">
+        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8">
+          <h3 className="text-base sm:text-lg font-bold text-primary mb-3 sm:mb-4 flex items-center gap-2">
             <ExternalLink size={20} /> Platform Profiles
           </h3>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             {PLATFORMS.map(plat => {
               const prof = profileMap[plat.slug]
               const hasUsername = prof?.username
@@ -717,22 +727,22 @@ export function ScoreCard({ platform, benchmark }) {
   const pct = overall.total > 1 ? Math.round(((overall.total - overall.rank) / (overall.total - 1)) * 100) : 100
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-6">
-      <div className="flex items-center gap-3 mb-4">
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-6">
+      <div className="flex items-center gap-3 mb-3 sm:mb-4">
         <div className="w-4 h-4 rounded-full" style={{ backgroundColor: platform.color }} />
-        <h3 className="font-bold text-primary text-lg">{platform.name}</h3>
+        <h3 className="font-bold text-primary text-base sm:text-lg">{platform.name}</h3>
       </div>
 
-      <div className="flex items-end justify-between mb-6">
+      <div className="flex items-end justify-between mb-4 sm:mb-6">
         <div>
-          <div className="text-4xl font-bold text-primary">{myScore}</div>
-          <div className="text-primary/40 text-sm">/ 1000 score</div>
+          <div className="text-3xl sm:text-4xl font-bold text-primary">{myScore}</div>
+          <div className="text-primary/40 text-xs sm:text-sm">/ 1000 score</div>
         </div>
         <div className="text-right">
-          <div className="flex items-center gap-1 text-dark-ambient font-bold text-lg">
+          <div className="flex items-center gap-1 text-dark-ambient font-bold text-base sm:text-lg">
             <Trophy size={18} /> #{overall.rank}
           </div>
-          <div className="text-primary/40 text-sm">of {overall.total} students</div>
+          <div className="text-primary/40 text-xs sm:text-sm">of {overall.total} students</div>
         </div>
       </div>
 
@@ -766,26 +776,26 @@ export function BenchmarkChart({ platform, benchmark }) {
   const colors = [platform.color, '#0D1E56', '#3BC3E2', '#22ACD1']
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-6">
-      <h3 className="font-bold text-primary mb-1 flex items-center gap-2">
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-6">
+      <h3 className="font-bold text-primary mb-1 flex items-center gap-2 text-sm sm:text-base">
         <TrendingUp size={18} /> {platform.name} — You vs Averages
       </h3>
-      <p className="text-primary/40 text-sm mb-4">Compare your score against different groups</p>
+      <p className="text-primary/40 text-xs sm:text-sm mb-4">Compare your score against different groups</p>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={chartData} barSize={40}>
+      <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={chartData} barSize={32}>
             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-            <XAxis dataKey="name" stroke="#0D1E56" fontSize={12} />
-            <YAxis stroke="#0D1E56" domain={[0, 'auto']} />
+            <XAxis dataKey="name" stroke="#0D1E56" fontSize={11} tick={{ fontSize: 10 }} />
+            <YAxis stroke="#0D1E56" domain={[0, 'auto']} width={35} />
             <Tooltip contentStyle={{ background: '#fff', border: '1px solid #3BC3E2', borderRadius: 8, color: '#0D1E56' }} />
-            <Bar dataKey="score" label={{ position: 'top', fill: '#0D1E56', fontSize: 13, fontWeight: 600 }}>
+            <Bar dataKey="score" label={{ position: 'top', fill: '#0D1E56', fontSize: 11, fontWeight: 600 }}>
               {chartData.map((_, i) => <Cell key={i} fill={colors[i]} />)}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
 
-        <div className="space-y-3 flex flex-col justify-center">
+        <div className="space-y-2 sm:space-y-3 flex flex-col justify-center">
           <RankBadge label="Overall Rank" rank={overall.rank} total={overall.total} />
           {batch && <RankBadge label={`${batch.name} Rank`} rank={batch.rank} total={batch.total} accent />}
           {college && <RankBadge label={`${college.name} Rank`} rank={college.rank} total={college.total} />}
@@ -830,15 +840,15 @@ export function DetailedStats({ platform, stats }) {
   ]
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-6">
-      <h3 className="font-bold text-primary mb-4 flex items-center gap-2">
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-6">
+      <h3 className="font-bold text-primary mb-3 sm:mb-4 flex items-center gap-2 text-sm sm:text-base">
         <Award size={18} /> {platform.name} Stats
       </h3>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
         {items.map(item => (
-          <div key={item.label} className="bg-gray-50 rounded-xl px-4 py-3">
-            <div className="text-xs text-primary/50 font-medium">{item.label}</div>
-            <div className={`text-xl ${item.bold ? 'font-bold text-primary' : 'font-semibold text-primary/80'}`}>
+          <div key={item.label} className="bg-gray-50 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3">
+            <div className="text-[10px] sm:text-xs text-primary/50 font-medium">{item.label}</div>
+            <div className={`text-lg sm:text-xl ${item.bold ? 'font-bold text-primary' : 'font-semibold text-primary/80'}`}>
               {item.color && <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: item.color }} />}
               {item.value}
             </div>
@@ -865,7 +875,7 @@ export function GitHubStats({ stats, username }) {
   const totalLangRepos = topLangs.reduce((s, l) => s + l.count, 0)
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-6 space-y-6">
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-6 space-y-4 sm:space-y-6">
       <div className="flex items-center gap-3">
         <div className="w-4 h-4 rounded-full bg-[#333]" />
         <h3 className="font-bold text-primary text-lg">GitHub Analytics</h3>
@@ -878,28 +888,28 @@ export function GitHubStats({ stats, username }) {
       </div>
 
       {/* Stats grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
         {[
           { icon: <GitCommitHorizontal size={16} />, label: 'Commits', value: stats.total_commits || stats.recent_commits || 0, color: 'text-green-600' },
           { icon: <Code2 size={16} />, label: 'Repos', value: stats.own_repos, color: 'text-primary' },
           { icon: <Star size={16} />, label: 'Stars', value: stats.total_stars, color: 'text-amber-500' },
           { icon: <Users size={16} />, label: 'Followers', value: stats.followers, color: 'text-purple-500' },
         ].map(item => (
-          <div key={item.label} className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+          <div key={item.label} className="bg-gray-50 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-center">
             <div className={`flex items-center justify-center gap-1.5 ${item.color} mb-1`}>
               {item.icon}
-              <span className="text-xs font-medium text-primary/50">{item.label}</span>
+              <span className="text-[10px] sm:text-xs font-medium text-primary/50">{item.label}</span>
             </div>
-            <div className="text-2xl font-bold text-primary">{item.value}</div>
+            <div className="text-xl sm:text-2xl font-bold text-primary">{item.value}</div>
           </div>
         ))}
       </div>
 
       {/* Secondary stats: PRs, Forks, Streaks */}
       {(stats.total_prs > 0 || stats.total_forks > 0 || stats.current_streak > 0 || stats.longest_streak > 0) && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
           {stats.total_prs > 0 && (
-            <div className="bg-gray-50 rounded-xl px-4 py-3 text-center">
+            <div className="bg-gray-50 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-center">
               <div className="flex items-center justify-center gap-1.5 text-purple-500 mb-1">
                 <GitPullRequest size={16} />
                 <span className="text-xs font-medium text-primary/50">Pull Requests</span>
@@ -1088,24 +1098,24 @@ function EditScreen({ student, profiles, onSave, onCancel }) {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-primary sticky top-0 z-50 shadow-lg">
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/alta-white-text.png" alt="ALTA" className="h-7" />
+        <div className="max-w-3xl mx-auto px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <img src="/alta-white-text.png" alt="ALTA" className="h-6 sm:h-7" />
             <span className="text-white/30">|</span>
-            <span className="text-white font-medium">Edit Profile</span>
+            <span className="text-white font-medium text-sm sm:text-base">Edit Profile</span>
           </div>
           <button onClick={onCancel}
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
-            <X size={14} /> Cancel
+            className="p-2 sm:px-4 sm:py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg font-medium text-sm flex items-center gap-1.5 transition-colors">
+            <X size={14} /> <span className="hidden sm:inline">Cancel</span>
           </button>
         </div>
       </header>
 
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-8 space-y-6">
+      <div className="max-w-3xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8 space-y-5 sm:space-y-6">
           <div>
-            <h2 className="text-2xl font-bold text-primary">Platform Profiles</h2>
-            <p className="text-primary/50 text-sm mt-1">
+            <h2 className="text-xl sm:text-2xl font-bold text-primary">Platform Profiles</h2>
+            <p className="text-primary/50 text-xs sm:text-sm mt-1">
               Enter your username or paste a full profile URL. We'll extract the username automatically.
             </p>
           </div>

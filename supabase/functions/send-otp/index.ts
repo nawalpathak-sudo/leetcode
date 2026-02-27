@@ -58,41 +58,39 @@ serve(async (req) => {
 
     const windowStart = new Date(Date.now() - RATE_WINDOW_MINUTES * 60 * 1000).toISOString()
 
-    // Check per-phone rate limit
-    const { count: phoneCount } = await supabase
-      .from('otp_rate_limits')
-      .select('*', { count: 'exact', head: true })
-      .eq('phone', phone)
-      .gte('created_at', windowStart)
+    // Run all 3 rate limit checks in parallel
+    const [phoneResult, ipResult, cooldownResult] = await Promise.all([
+      supabase
+        .from('otp_rate_limits')
+        .select('*', { count: 'exact', head: true })
+        .eq('phone', phone)
+        .gte('created_at', windowStart),
+      supabase
+        .from('otp_rate_limits')
+        .select('*', { count: 'exact', head: true })
+        .eq('ip_address', clientIp)
+        .gte('created_at', windowStart),
+      supabase
+        .from('otp_codes')
+        .select('created_at')
+        .eq('phone', phone)
+        .single(),
+    ])
 
-    if ((phoneCount ?? 0) >= MAX_OTP_PER_PHONE) {
+    if ((phoneResult.count ?? 0) >= MAX_OTP_PER_PHONE) {
       return jsonResponse({
         error: `Too many OTP requests. Try again after ${RATE_WINDOW_MINUTES} minutes.`,
       }, 429)
     }
 
-    // Check per-IP rate limit
-    const { count: ipCount } = await supabase
-      .from('otp_rate_limits')
-      .select('*', { count: 'exact', head: true })
-      .eq('ip_address', clientIp)
-      .gte('created_at', windowStart)
-
-    if ((ipCount ?? 0) >= MAX_OTP_PER_IP) {
+    if ((ipResult.count ?? 0) >= MAX_OTP_PER_IP) {
       return jsonResponse({
         error: 'Too many OTP requests from this network. Try again later.',
       }, 429)
     }
 
-    // Check cooldown: last OTP for this phone must be > 30s ago
-    const { data: lastOtp } = await supabase
-      .from('otp_codes')
-      .select('created_at')
-      .eq('phone', phone)
-      .single()
-
-    if (lastOtp) {
-      const elapsed = (Date.now() - new Date(lastOtp.created_at).getTime()) / 1000
+    if (cooldownResult.data) {
+      const elapsed = (Date.now() - new Date(cooldownResult.data.created_at).getTime()) / 1000
       if (elapsed < COOLDOWN_SECONDS) {
         const wait = Math.ceil(COOLDOWN_SECONDS - elapsed)
         return jsonResponse({
@@ -105,19 +103,20 @@ serve(async (req) => {
     const otp = generateOTP()
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
 
-    const { error: dbError } = await supabase
-      .from('otp_codes')
-      .upsert(
-        { phone, code: otp, expires_at: expiresAt, verified: false, attempts: 0, created_at: new Date().toISOString() },
-        { onConflict: 'phone' },
-      )
+    // Save OTP and log rate limit in parallel
+    const [{ error: dbError }] = await Promise.all([
+      supabase
+        .from('otp_codes')
+        .upsert(
+          { phone, code: otp, expires_at: expiresAt, verified: false, attempts: 0, created_at: new Date().toISOString() },
+          { onConflict: 'phone' },
+        ),
+      supabase
+        .from('otp_rate_limits')
+        .insert({ phone, ip_address: clientIp }),
+    ])
 
     if (dbError) throw new Error(`DB error: ${dbError.message}`)
-
-    // Log this request for rate limiting
-    await supabase
-      .from('otp_rate_limits')
-      .insert({ phone, ip_address: clientIp })
 
     // Send OTP via TrustSignal WhatsApp API
     const apiKey = Deno.env.get('TRUSTSIGNAL_API_KEY')!

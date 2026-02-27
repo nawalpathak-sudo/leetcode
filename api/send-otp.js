@@ -50,41 +50,39 @@ export default async function handler(req, res) {
 
     const windowStart = new Date(Date.now() - RATE_WINDOW_MINUTES * 60 * 1000).toISOString()
 
-    // Check per-phone rate limit
-    const { count: phoneCount } = await supabase
-      .from('otp_rate_limits')
-      .select('*', { count: 'exact', head: true })
-      .eq('phone', phone)
-      .gte('created_at', windowStart)
+    // Run all 3 rate limit checks in parallel
+    const [phoneResult, ipResult, cooldownResult] = await Promise.all([
+      supabase
+        .from('otp_rate_limits')
+        .select('*', { count: 'exact', head: true })
+        .eq('phone', phone)
+        .gte('created_at', windowStart),
+      supabase
+        .from('otp_rate_limits')
+        .select('*', { count: 'exact', head: true })
+        .eq('ip_address', clientIp)
+        .gte('created_at', windowStart),
+      supabase
+        .from('otp_codes')
+        .select('created_at')
+        .eq('phone', phone)
+        .single(),
+    ])
 
-    if (phoneCount >= MAX_OTP_PER_PHONE) {
+    if (phoneResult.count >= MAX_OTP_PER_PHONE) {
       return res.status(429).json({
         error: `Too many OTP requests. Try again after ${RATE_WINDOW_MINUTES} minutes.`,
       })
     }
 
-    // Check per-IP rate limit
-    const { count: ipCount } = await supabase
-      .from('otp_rate_limits')
-      .select('*', { count: 'exact', head: true })
-      .eq('ip_address', clientIp)
-      .gte('created_at', windowStart)
-
-    if (ipCount >= MAX_OTP_PER_IP) {
+    if (ipResult.count >= MAX_OTP_PER_IP) {
       return res.status(429).json({
         error: 'Too many OTP requests from this network. Try again later.',
       })
     }
 
-    // Check cooldown: last OTP for this phone must be > 30s ago
-    const { data: lastOtp } = await supabase
-      .from('otp_codes')
-      .select('created_at')
-      .eq('phone', phone)
-      .single()
-
-    if (lastOtp) {
-      const elapsed = (Date.now() - new Date(lastOtp.created_at).getTime()) / 1000
+    if (cooldownResult.data) {
+      const elapsed = (Date.now() - new Date(cooldownResult.data.created_at).getTime()) / 1000
       if (elapsed < COOLDOWN_SECONDS) {
         const wait = Math.ceil(COOLDOWN_SECONDS - elapsed)
         return res.status(429).json({
@@ -97,19 +95,20 @@ export default async function handler(req, res) {
     const otp = String(Math.floor(100000 + Math.random() * 900000))
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
 
-    const { error: dbError } = await supabase
-      .from('otp_codes')
-      .upsert(
-        { phone, code: otp, expires_at: expiresAt, verified: false, attempts: 0, created_at: new Date().toISOString() },
-        { onConflict: 'phone' },
-      )
+    // Save OTP and log rate limit in parallel
+    const [{ error: dbError }] = await Promise.all([
+      supabase
+        .from('otp_codes')
+        .upsert(
+          { phone, code: otp, expires_at: expiresAt, verified: false, attempts: 0, created_at: new Date().toISOString() },
+          { onConflict: 'phone' },
+        ),
+      supabase
+        .from('otp_rate_limits')
+        .insert({ phone, ip_address: clientIp }),
+    ])
 
     if (dbError) throw new Error(`DB error: ${dbError.message}`)
-
-    // Log this request for rate limiting
-    await supabase
-      .from('otp_rate_limits')
-      .insert({ phone, ip_address: clientIp })
 
     const apiKey = process.env.TRUSTSIGNAL_API_KEY
     const sender = process.env.TRUSTSIGNAL_SENDER

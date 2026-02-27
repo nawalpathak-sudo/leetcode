@@ -4,7 +4,7 @@ import { fetchLeetCodeData, fetchCodeforcesData, fetchGitHubData, sanitizeUserna
 import {
   loadAllProfiles, saveProfile, deleteProfile, clearAllProfiles,
   upsertStudents, loadAllStudents, linkProfile, loadAllCodingProfilesMap,
-  bulkUpdateEmails,
+  bulkUpdateEmails, updateStudentField,
 } from '../lib/db'
 import Papa from 'papaparse'
 
@@ -101,6 +101,7 @@ function Spinner() {
 
 function StudentImport({ platforms = [], adminUser }) {
   const isFaculty = adminUser?.role === 'faculty'
+  const isAdmin = adminUser?.id === 'master' || adminUser?.role === 'admin'
   const facultyCampus = adminUser?.campus
   const fileRef = useRef()
   const [csvData, setCsvData] = useState(null)
@@ -115,6 +116,9 @@ function StudentImport({ platforms = [], adminUser }) {
   const [editingCell, setEditingCell] = useState(null)
   const [editValue, setEditValue] = useState('')
   const [savingCell, setSavingCell] = useState(false)
+  const [editingDetail, setEditingDetail] = useState(null)
+  const [detailValue, setDetailValue] = useState('')
+  const [savingDetail, setSavingDetail] = useState(false)
 
   const loadData = async () => {
     setLoadingStudents(true)
@@ -223,6 +227,30 @@ function StudentImport({ platforms = [], adminUser }) {
     if (e.key === 'Escape') { setEditingCell(null); setEditValue('') }
   }
 
+  const handleStartDetailEdit = (lead_id, field, currentValue) => {
+    setEditingDetail({ lead_id, field })
+    setDetailValue(currentValue || '')
+  }
+
+  const handleSaveDetail = async () => {
+    if (!editingDetail) return
+    const { lead_id, field } = editingDetail
+    const val = detailValue.trim()
+    setSavingDetail(true)
+    const ok = await updateStudentField(lead_id, field, val)
+    if (ok) {
+      setStudents(prev => prev.map(s => s.lead_id === lead_id ? { ...s, [field]: val } : s))
+    }
+    setSavingDetail(false)
+    setEditingDetail(null)
+    setDetailValue('')
+  }
+
+  const handleDetailKeyDown = (e) => {
+    if (e.key === 'Enter') handleSaveDetail()
+    if (e.key === 'Escape') { setEditingDetail(null); setDetailValue('') }
+  }
+
   return (
     <div className="space-y-6">
       {/* CSV Upload */}
@@ -317,6 +345,8 @@ function StudentImport({ platforms = [], adminUser }) {
               <thead className="sticky top-0 bg-[#f3f4f8] z-10">
                 <tr className="text-primary/60">
                   <th className="py-2.5 px-3 text-left font-medium">Name</th>
+                  <th className="py-2.5 px-3 text-left font-medium">Email</th>
+                  <th className="py-2.5 px-3 text-left font-medium">Phone</th>
                   <th className="py-2.5 px-3 text-left font-medium">College</th>
                   <th className="py-2.5 px-3 text-left font-medium">Batch</th>
                   {platforms.map(p => (
@@ -331,6 +361,36 @@ function StudentImport({ platforms = [], adminUser }) {
                       <div className="font-medium text-primary">{s.student_name || '—'}</div>
                       <div className="text-xs text-primary/30">{s.lead_id}</div>
                     </td>
+                    {['email', 'phone'].map(field => {
+                      const isEditingThis = editingDetail?.lead_id === s.lead_id && editingDetail?.field === field
+                      const val = s[field]
+                      return (
+                        <td key={field} className="py-2 px-3">
+                          {isEditingThis ? (
+                            <input
+                              autoFocus
+                              value={detailValue}
+                              onChange={e => setDetailValue(e.target.value)}
+                              onKeyDown={handleDetailKeyDown}
+                              onBlur={handleSaveDetail}
+                              disabled={savingDetail}
+                              className="bg-white border border-ambient rounded px-2 py-1 text-sm text-primary w-40 focus:outline-none focus:ring-1 focus:ring-ambient"
+                              placeholder={field === 'email' ? 'email@example.com' : '91XXXXXXXXXX'}
+                            />
+                          ) : isAdmin ? (
+                            <button
+                              onClick={() => handleStartDetailEdit(s.lead_id, field, val)}
+                              className={`text-left text-sm ${val ? 'text-primary/70 hover:text-primary' : 'text-primary/20 hover:text-ambient'}`}
+                              title={`Click to ${val ? 'edit' : 'add'} ${field}`}
+                            >
+                              {val || `+ Add`}
+                            </button>
+                          ) : (
+                            <span className="text-sm text-primary/60">{val || '—'}</span>
+                          )}
+                        </td>
+                      )
+                    })}
                     <td className="py-2 px-3 text-primary/70">{s.college}</td>
                     <td className="py-2 px-3 text-primary/70">{s.batch}</td>
                     {platforms.map(p => {

@@ -2,8 +2,8 @@
 
 @theme {
   --color-primary: #0D1E56;
-  --color-ambient: #F59E0B;
-  --color-dark-ambient: #D97706;
+  --color-ambient: #3BC3E2;
+  --color-dark-ambient: #22ACD1;
 }
 
 body {
@@ -20,13 +20,21 @@ body {
   background: #f1f5f9;
 }
 ::-webkit-scrollbar-thumb {
-  background: #F59E0B;
+  background: #22ACD1;
   border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .recharts-default-tooltip {
   background: #FFFFFF !important;
-  border: 1px solid #F59E0B !important;
+  border: 1px solid #3BC3E2 !important;
   border-radius: 8px !important;
   color: #0D1E56 !important;
 }
@@ -169,12 +177,12 @@ body {
 }
 
 .cv-glitch::before {
-  color: #F59E0B;
+  color: #3BC3E2;
   z-index: -1;
 }
 
 .cv-glitch::after {
-  color: #D97706;
+  color: #22ACD1;
   z-index: -2;
 }
 

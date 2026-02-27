@@ -23,6 +23,7 @@ export async function upsertStudents(rows) {
     .upsert(rows, { onConflict: 'lead_id' })
 
   if (error) console.error('Upsert students error:', error)
+  else invalidateStudentsCache()
   return !error
 }
 
@@ -54,30 +55,62 @@ export async function bulkUpdateEmails(rows) {
   return { updated, inserted, failed }
 }
 
+let _studentsCache = null
+let _studentsCacheTs = 0
+const STUDENTS_CACHE_TTL = 5 * 60 * 1000
+
 export async function loadAllStudents() {
-  const { data, error } = await supabase
+  const now = Date.now()
+  // Stale-while-revalidate: return cached immediately, refresh in background if stale
+  if (_studentsCache && now - _studentsCacheTs < STUDENTS_CACHE_TTL) return _studentsCache
+
+  const stale = _studentsCache
+  const fetchPromise = supabase
     .from('students')
     .select('*')
     .order('student_name')
+    .then(({ data, error }) => {
+      if (error) { console.error('Load students error:', error); return stale || [] }
+      _studentsCache = data || []
+      _studentsCacheTs = Date.now()
+      return _studentsCache
+    })
 
-  if (error) { console.error('Load students error:', error); return [] }
-  return data || []
+  // If we have stale data, return it immediately and refresh in background
+  if (stale) {
+    fetchPromise.catch(() => {})
+    return stale
+  }
+  return fetchPromise
+}
+
+export function invalidateStudentsCache() {
+  _studentsCache = null
+  _studentsCacheTs = 0
 }
 
 // ---- Coding Profiles Map (lead_id -> { platform: username }) ----
 
+let _profilesMapCache = null
+let _profilesMapCacheTs = 0
+
 export async function loadAllCodingProfilesMap() {
+  const now = Date.now()
+  if (_profilesMapCache && now - _profilesMapCacheTs < CACHE_TTL) return _profilesMapCache
+
   const { data, error } = await supabase
     .from('coding_profiles')
     .select('lead_id, platform, username')
 
-  if (error) { console.error('Load profiles map error:', error); return {} }
+  if (error) { console.error('Load profiles map error:', error); return _profilesMapCache || {} }
 
   const map = {}
   for (const row of (data || [])) {
     if (!map[row.lead_id]) map[row.lead_id] = {}
     map[row.lead_id][row.platform] = row.username
   }
+  _profilesMapCache = map
+  _profilesMapCacheTs = Date.now()
   return map
 }
 
@@ -254,9 +287,18 @@ export async function saveProfile(leadId, platform, username, rawData) {
     .upsert(row, { onConflict: 'lead_id,platform' })
 
   if (error) console.error('Save profile error:', error)
+  else invalidateProfileCache(platform)
 }
 
+// In-memory cache for leaderboard snapshots (avoids re-fetching 2000+ rows on every visit)
+const _profileCache = {}
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
 export async function loadAllProfiles(platform, { includeRaw = false } = {}) {
+  const cacheKey = `${platform}:${includeRaw}`
+  const cached = _profileCache[cacheKey]
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data
+
   const fields = includeRaw
     ? 'lead_id, platform, username, score, stats, raw_json, fetched_at, students(student_name, college, batch, email, student_username)'
     : 'lead_id, platform, username, score, stats, fetched_at, students(student_name, college, batch, email, student_username)'
@@ -269,7 +311,7 @@ export async function loadAllProfiles(platform, { includeRaw = false } = {}) {
 
   if (error) { console.error('Load profiles error:', error); return [] }
   // Flatten: merge student info + stats into top level
-  return (data || []).map(row => ({
+  const result = (data || []).map(row => ({
     lead_id: row.lead_id,
     platform: row.platform,
     username: row.username,
@@ -283,6 +325,18 @@ export async function loadAllProfiles(platform, { includeRaw = false } = {}) {
     ...(row.stats || {}),
     ...(includeRaw ? { raw_json: row.raw_json } : {}),
   }))
+
+  _profileCache[cacheKey] = { data: result, ts: Date.now() }
+  return result
+}
+
+export function invalidateProfileCache(platform) {
+  if (platform) {
+    delete _profileCache[`${platform}:false`]
+    delete _profileCache[`${platform}:true`]
+  } else {
+    for (const key in _profileCache) delete _profileCache[key]
+  }
 }
 
 export async function loadProfile(platform, username) {
@@ -304,23 +358,23 @@ export async function loadProfile(platform, username) {
 }
 
 export async function searchProfiles(platform, query) {
-  // Search by username in coding_profiles
-  const { data, error } = await supabase
-    .from('coding_profiles')
-    .select('*, students(student_name, college, batch, email, student_username)')
-    .eq('platform', platform)
-    .ilike('username', `%${query}%`)
-    .order('score', { ascending: false })
-    .limit(10)
-
-  // Also search by student name
-  const { data: byName } = await supabase
-    .from('coding_profiles')
-    .select('*, students!inner(student_name, college, batch, email, student_username)')
-    .eq('platform', platform)
-    .ilike('students.student_name', `%${query}%`)
-    .order('score', { ascending: false })
-    .limit(10)
+  // Fire both searches in parallel
+  const [{ data }, { data: byName }] = await Promise.all([
+    supabase
+      .from('coding_profiles')
+      .select('*, students(student_name, college, batch, email, student_username)')
+      .eq('platform', platform)
+      .ilike('username', `%${query}%`)
+      .order('score', { ascending: false })
+      .limit(10),
+    supabase
+      .from('coding_profiles')
+      .select('*, students!inner(student_name, college, batch, email, student_username)')
+      .eq('platform', platform)
+      .ilike('students.student_name', `%${query}%`)
+      .order('score', { ascending: false })
+      .limit(10),
+  ])
 
   const merged = new Map()
   for (const row of [...(data || []), ...(byName || [])]) {
@@ -346,6 +400,7 @@ export async function deleteProfile(leadId, platform) {
     .eq('platform', platform)
 
   if (error) console.error('Delete profile error:', error)
+  else invalidateProfileCache(platform)
   return !error
 }
 
@@ -356,6 +411,7 @@ export async function clearAllProfiles(platform) {
     .eq('platform', platform)
 
   if (error) console.error('Clear profiles error:', error)
+  else invalidateProfileCache(platform)
 }
 
 // ---- Slug Helpers ----
@@ -480,6 +536,16 @@ export async function updateStudentEmail(leadId, email) {
   return !error
 }
 
+export async function updateStudentField(leadId, field, value) {
+  const { error } = await supabase
+    .from('students')
+    .update({ [field]: value })
+    .eq('lead_id', leadId)
+  if (error) console.error(`Update student ${field} error:`, error)
+  else invalidateStudentsCache()
+  return !error
+}
+
 export async function sendOtp(phone) {
   try {
     const res = await fetch('/api/send-otp', {
@@ -547,6 +613,7 @@ export async function saveStudentUsername(leadId, platform, username) {
     }, { onConflict: 'lead_id,platform' })
 
   if (error) console.error('Save student username error:', error)
+  else invalidateProfileCache(platform)
   return !error
 }
 
@@ -558,6 +625,7 @@ export async function deleteStudentProfile(leadId, platform) {
     .eq('platform', platform)
 
   if (error) console.error('Delete student profile error:', error)
+  else invalidateProfileCache(platform)
   return !error
 }
 
@@ -575,6 +643,7 @@ export async function linkProfile(leadId, platform, username) {
     }, { onConflict: 'lead_id,platform' })
 
   if (error) console.error('Link profile error:', error)
+  else invalidateProfileCache(platform)
   return !error
 }
 
