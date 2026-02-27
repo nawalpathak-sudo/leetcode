@@ -118,6 +118,7 @@ export default function StudentPortal() {
 
   if (authLoading) return <FullSpinner />
   if (screen === 'auth' && !authStudent) return <AuthScreen onSuccess={handleAuthSuccess} />
+  if (!student) return <FullSpinner />
   if (screen === 'edit') return <EditScreen student={student} profiles={profiles} onSave={handleSaveEdit} onCancel={() => setScreen('dashboard')} />
   if (screen === 'projects') return (
     <div className="min-h-screen bg-gray-50">
