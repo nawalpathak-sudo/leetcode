@@ -101,7 +101,7 @@ serve(async (req) => {
 
     // All checks passed — generate and send OTP
     const otp = generateOTP()
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 
     // Save OTP and log rate limit in parallel
     const [{ error: dbError }] = await Promise.all([

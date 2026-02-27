@@ -27,42 +27,32 @@ export default function StudentPortal() {
   const [student, setStudent] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [benchmarks, setBenchmarks] = useState({})
-  const [loading, setLoading] = useState(false)
+  const [profilesLoading, setProfilesLoading] = useState(false)
 
   useEffect(() => {
     if (authStudent && screen === 'auth') {
-      loadDashboard(authStudent.lead_id).then(s => {
-        if (s) setScreen('dashboard')
-      })
+      // Already have student from auth, show dashboard immediately
+      setStudent(authStudent)
+      setScreen('dashboard')
+      loadDashboardData(authStudent.lead_id, authStudent)
     }
   }, [authStudent])
 
-  const loadDashboard = async (leadId) => {
-    setLoading(true)
-    const s = await getStudent(leadId)
-    if (!s) { setLoading(false); return null }
-    setStudent(s)
+  // Loads profiles + benchmarks progressively — dashboard is already visible
+  const loadDashboardData = async (leadId, studentData) => {
+    setProfilesLoading(true)
 
-    // Fire profiles + all leaderboards in parallel instead of sequentially
-    const [profs, ...leaderboards] = await Promise.all([
-      getStudentProfiles(leadId),
-      ...SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
-    ])
-
-    // GitHub contributions fetch — don't block rendering, fire in background
-    const ghProf = profs.find(p => p.platform === 'github')
-    if (ghProf?.username && ghProf.raw_json && !ghProf.raw_json.contributions) {
-      fetchGitHubContributions(ghProf.username).then(contributions => {
-        if (contributions) {
-          ghProf.raw_json = { ...ghProf.raw_json, contributions }
-          saveProfile(leadId, 'github', ghProf.username, ghProf.raw_json)
-          setProfiles(prev => prev.map(p => p.platform === 'github' ? { ...p, raw_json: ghProf.raw_json } : p))
-        }
-      })
-    }
-
+    // Phase 1: Get student profiles (lightweight, fast)
+    const profs = await getStudentProfiles(leadId)
     setProfiles(profs)
+    setProfilesLoading(false)
 
+    // Phase 2: Load leaderboards for benchmarks in background (heavy, slow)
+    const leaderboards = await Promise.all(
+      SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
+    )
+
+    const s = studentData || student
     const bm = {}
     SCORED_PLATFORMS.forEach((plat, i) => {
       const all = leaderboards[i]
@@ -84,14 +74,26 @@ export default function StudentPortal() {
       }
     })
     setBenchmarks(bm)
-    setLoading(false)
-    return s
+
+    // Phase 3: GitHub contributions — fire and forget
+    const ghProf = profs.find(p => p.platform === 'github')
+    if (ghProf?.username && ghProf.raw_json && !ghProf.raw_json.contributions) {
+      fetchGitHubContributions(ghProf.username).then(contributions => {
+        if (contributions) {
+          ghProf.raw_json = { ...ghProf.raw_json, contributions }
+          saveProfile(leadId, 'github', ghProf.username, ghProf.raw_json)
+          setProfiles(prev => prev.map(p => p.platform === 'github' ? { ...p, raw_json: ghProf.raw_json } : p))
+        }
+      })
+    }
   }
 
-  const handleAuthSuccess = async (studentData) => {
+  const handleAuthSuccess = (studentData) => {
     login(studentData)
-    await loadDashboard(studentData.lead_id)
+    setStudent(studentData)
     setScreen('dashboard')
+    // Load data progressively — dashboard shows immediately
+    loadDashboardData(studentData.lead_id, studentData)
   }
 
   const handleLogout = () => {
@@ -103,11 +105,13 @@ export default function StudentPortal() {
   }
 
   const handleSaveEdit = async () => {
-    await loadDashboard(student.lead_id)
+    const s = await getStudent(student.lead_id)
+    if (s) setStudent(s)
     setScreen('dashboard')
+    loadDashboardData(student.lead_id, s || student)
   }
 
-  if (authLoading || loading) return <FullSpinner />
+  if (authLoading) return <FullSpinner />
   if (screen === 'auth' && !authStudent) return <AuthScreen onSuccess={handleAuthSuccess} />
   if (screen === 'edit') return <EditScreen student={student} profiles={profiles} onSave={handleSaveEdit} onCancel={() => setScreen('dashboard')} />
   if (screen === 'projects') return (
@@ -131,7 +135,7 @@ export default function StudentPortal() {
     </div>
   )
 
-  return <DashboardScreen student={student} profiles={profiles} benchmarks={benchmarks} onEdit={() => setScreen('edit')} onProjects={() => setScreen('projects')} onLogout={handleLogout} />
+  return <DashboardScreen student={student} profiles={profiles} benchmarks={benchmarks} profilesLoading={profilesLoading} onEdit={() => setScreen('edit')} onProjects={() => setScreen('projects')} onLogout={handleLogout} />
 }
 
 // ============================================================
@@ -156,6 +160,7 @@ function AuthScreen({ onSuccess }) {
   const [leadId, setLeadId] = useState('')
   const [signupMethod, setSignupMethod] = useState('email') // 'email' or 'leadid'
   const [foundStudent, setFoundStudent] = useState(null)
+  const studentPromiseRef = useRef(null)
   const timerRef = useRef(null)
 
   const startResendTimer = () => {
@@ -272,8 +277,8 @@ function AuthScreen({ onSuccess }) {
       setError('Please enter a valid 10-digit mobile number.')
       setLoading(false); return
     }
-    // Fire OTP immediately, don't block UI on student lookup
-    const studentPromise = getStudentByPhone(formatted)
+    // Fire student lookup and OTP in parallel
+    studentPromiseRef.current = getStudentByPhone(formatted)
     const result = await sendOtp(formatted)
     if (!result?.success) {
       setError(result?.error || 'Failed to send OTP. Please try again.')
@@ -285,7 +290,7 @@ function AuthScreen({ onSuccess }) {
     startResendTimer()
     setLoading(false)
     // Resolve student lookup in background
-    const student = await studentPromise
+    const student = await studentPromiseRef.current
     if (!student) {
       setStep(1)
       setError('No account found with this number. Please sign up first.')
@@ -303,7 +308,16 @@ function AuthScreen({ onSuccess }) {
       setError('Invalid or expired OTP. Please try again.')
       setLoading(false); return
     }
-    onSuccess(foundStudent)
+    // Ensure student data is resolved before completing login
+    let student = foundStudent
+    if (!student && studentPromiseRef.current) {
+      student = await studentPromiseRef.current
+    }
+    if (!student) {
+      setError('No account found with this number. Please sign up first.')
+      setStep(1); setLoading(false); return
+    }
+    onSuccess(student)
     setLoading(false)
   }
 
@@ -528,7 +542,18 @@ function AuthScreen({ onSuccess }) {
 // DASHBOARD
 // ============================================================
 
-function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, onLogout }) {
+function SectionSkeleton({ lines = 3 }) {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8 animate-pulse">
+      <div className="h-5 bg-primary/10 rounded w-1/3 mb-4" />
+      {Array.from({ length: lines }, (_, i) => (
+        <div key={i} className="h-4 bg-primary/5 rounded mb-3" style={{ width: `${80 - i * 15}%` }} />
+      ))}
+    </div>
+  )
+}
+
+function DashboardScreen({ student, profiles, benchmarks, profilesLoading, onEdit, onProjects, onLogout }) {
   const profileMap = {}
   for (const p of profiles) profileMap[p.platform] = p
   const [copied, setCopied] = useState(false)
@@ -606,8 +631,13 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
           </div>
         </div>
 
-        {/* Platform Scores Overview */}
-        {SCORED_PLATFORMS.some(p => benchmarks[p]) && (
+        {/* Platform Scores — skeleton while benchmarks loading */}
+        {profilesLoading ? (
+          <div className="grid sm:grid-cols-2 gap-3 sm:gap-6">
+            <SectionSkeleton lines={2} />
+            <SectionSkeleton lines={2} />
+          </div>
+        ) : SCORED_PLATFORMS.some(p => benchmarks[p]) ? (
           <div className="grid sm:grid-cols-2 gap-3 sm:gap-6">
             {SCORED_PLATFORMS.map(plat => {
               const bm = benchmarks[plat]
@@ -616,7 +646,7 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
               return <ScoreCard key={plat} platform={platInfo} benchmark={bm} />
             })}
           </div>
-        )}
+        ) : null}
 
         {/* Recent Activity */}
         {SCORED_PLATFORMS.map(plat => {
@@ -645,7 +675,9 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
         })}
 
         {/* Detailed Stats */}
-        {SCORED_PLATFORMS.map(plat => {
+        {profilesLoading ? (
+          <SectionSkeleton lines={4} />
+        ) : SCORED_PLATFORMS.map(plat => {
           const bm = benchmarks[plat]
           if (!bm?.myStats) return null
           const platInfo = PLATFORMS.find(p => p.slug === plat)
@@ -671,6 +703,9 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
         )}
 
         {/* All Platform Links */}
+        {profilesLoading ? (
+          <SectionSkeleton lines={3} />
+        ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8">
           <h3 className="text-base sm:text-lg font-bold text-primary mb-3 sm:mb-4 flex items-center gap-2">
             <ExternalLink size={20} /> Platform Profiles
@@ -709,10 +744,11 @@ function DashboardScreen({ student, profiles, benchmarks, onEdit, onProjects, on
             <Edit3 size={14} /> Manage platform profiles
           </button>
         </div>
+        )}
 
         {/* No data message */}
-        {!SCORED_PLATFORMS.some(p => benchmarks[p]) && (
-          <div className="bg-amber-50 border border-amber-200 text-amber-800 px-6 py-4 rounded-xl text-center">
+        {!profilesLoading && !SCORED_PLATFORMS.some(p => benchmarks[p]) && profiles.length === 0 && (
+          <div className="bg-ambient/10 border border-ambient/30 text-primary px-6 py-4 rounded-xl text-center">
             <p className="font-medium mb-1">No coding profiles linked yet</p>
             <p className="text-sm">Click "Edit Profile" to add your platform usernames. Your admin will fetch your data.</p>
           </div>
