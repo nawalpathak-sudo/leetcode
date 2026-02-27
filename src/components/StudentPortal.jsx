@@ -31,26 +31,31 @@ export default function StudentPortal() {
 
   useEffect(() => {
     if (authStudent && screen === 'auth') {
-      // Already have student from auth, show dashboard immediately
       setStudent(authStudent)
       setScreen('dashboard')
-      loadDashboardData(authStudent.lead_id, authStudent)
+      loadDashboardData(authStudent.lead_id, authStudent, null)
     }
   }, [authStudent])
 
   // Loads profiles + benchmarks progressively — dashboard is already visible
-  const loadDashboardData = async (leadId, studentData) => {
+  const loadDashboardData = async (leadId, studentData, prefetchPromise) => {
     setProfilesLoading(true)
 
-    // Phase 1: Get student profiles (lightweight, fast)
-    const profs = await getStudentProfiles(leadId)
+    let profs, leaderboards
+    // Use prefetched data if available (fetched while user typed OTP)
+    const prefetched = prefetchPromise ? await prefetchPromise : null
+    if (prefetched) {
+      ;[profs, ...leaderboards] = prefetched
+    } else {
+      // No prefetch — load fresh
+      ;[profs, ...leaderboards] = await Promise.all([
+        getStudentProfiles(leadId),
+        ...SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
+      ])
+    }
+
     setProfiles(profs)
     setProfilesLoading(false)
-
-    // Phase 2: Load leaderboards for benchmarks in background (heavy, slow)
-    const leaderboards = await Promise.all(
-      SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
-    )
 
     const s = studentData || student
     const bm = {}
@@ -88,12 +93,12 @@ export default function StudentPortal() {
     }
   }
 
-  const handleAuthSuccess = (studentData) => {
+  const handleAuthSuccess = (studentData, prefetched) => {
     login(studentData)
     setStudent(studentData)
     setScreen('dashboard')
     // Load data progressively — dashboard shows immediately
-    loadDashboardData(studentData.lead_id, studentData)
+    loadDashboardData(studentData.lead_id, studentData, prefetched)
   }
 
   const handleLogout = () => {
@@ -161,6 +166,7 @@ function AuthScreen({ onSuccess }) {
   const [signupMethod, setSignupMethod] = useState('email') // 'email' or 'leadid'
   const [foundStudent, setFoundStudent] = useState(null)
   const studentPromiseRef = useRef(null)
+  const prefetchedDataRef = useRef(null)
   const timerRef = useRef(null)
 
   const startResendTimer = () => {
@@ -297,27 +303,32 @@ function AuthScreen({ onSuccess }) {
       return
     }
     setFoundStudent(student)
+    // Pre-fetch profile data while user types OTP (10-20s of idle time)
+    prefetchedDataRef.current = Promise.all([
+      getStudentProfiles(student.lead_id),
+      ...SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
+    ]).catch(() => null)
   }
 
   const handleLoginVerify = async (e) => {
     e.preventDefault()
     if (otp.length !== 6) return
     setLoading(true); setError('')
-    const result = await verifyOtp(phone, otp)
+    // Fire verify + resolve student in parallel
+    const [result, resolvedStudent] = await Promise.all([
+      verifyOtp(phone, otp),
+      foundStudent ? Promise.resolve(foundStudent) : studentPromiseRef.current,
+    ])
     if (!result?.success) {
       setError('Invalid or expired OTP. Please try again.')
       setLoading(false); return
     }
-    // Ensure student data is resolved before completing login
-    let student = foundStudent
-    if (!student && studentPromiseRef.current) {
-      student = await studentPromiseRef.current
-    }
-    if (!student) {
+    if (!resolvedStudent) {
       setError('No account found with this number. Please sign up first.')
       setStep(1); setLoading(false); return
     }
-    onSuccess(student)
+    // Don't wait for prefetch — pass the promise, dashboard will handle it
+    onSuccess(resolvedStudent, prefetchedDataRef.current)
     setLoading(false)
   }
 
