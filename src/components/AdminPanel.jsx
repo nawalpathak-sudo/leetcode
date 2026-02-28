@@ -305,6 +305,36 @@ function StudentImport({ platforms = [], adminUser }) {
         )}
       </div>
 
+      {/* Registration Stats */}
+      {!loadingStudents && campusStudents.length > 0 && (() => {
+        const withPhone = campusStudents.filter(s => s.phone).length
+        const withoutPhone = campusStudents.length - withPhone
+        const pct = Math.round((withPhone / campusStudents.length) * 100)
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-white rounded-xl p-4 border border-primary/10 shadow-sm">
+              <div className="text-xs font-medium text-primary/50 mb-1">Total Students</div>
+              <div className="text-2xl font-bold text-primary">{campusStudents.length}</div>
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-primary/10 shadow-sm">
+              <div className="text-xs font-medium text-primary/50 mb-1">Registered (Mobile)</div>
+              <div className="text-2xl font-bold text-dark-ambient">{withPhone}</div>
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-primary/10 shadow-sm">
+              <div className="text-xs font-medium text-primary/50 mb-1">Not Registered</div>
+              <div className="text-2xl font-bold text-primary/40">{withoutPhone}</div>
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-primary/10 shadow-sm">
+              <div className="text-xs font-medium text-primary/50 mb-1">Registration Rate</div>
+              <div className="text-2xl font-bold text-primary">{pct}%</div>
+              <div className="mt-2 w-full bg-primary/10 rounded-full h-2">
+                <div className="bg-gradient-to-r from-ambient to-dark-ambient h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* All Students with Filters */}
       {loadingStudents ? <Spinner /> : campusStudents.length > 0 && (
         <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm space-y-4">
