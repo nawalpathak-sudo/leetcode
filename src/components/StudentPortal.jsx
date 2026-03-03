@@ -169,6 +169,9 @@ function AuthScreen({ onSuccess }) {
   const studentPromiseRef = useRef(null)
   const prefetchedDataRef = useRef(null)
   const timerRef = useRef(null)
+  const loginSendRef = useRef(0)
+
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current) }, [])
 
   const startResendTimer = () => {
     setResendTimer(30)
@@ -191,25 +194,64 @@ function AuthScreen({ onSuccess }) {
     setLeadId('')
     setSignupMethod('email')
     setFoundStudent(null)
+    loginSendRef.current++
   }
 
   // ---- Signup handlers ----
-  const handleEmailCheck = async (e) => {
+
+  // Email method step 1→2: just store email locally, no network call
+  const handleEmailNext = (e) => {
     e.preventDefault()
     if (!email.trim()) return
-    setLoading(true); setError('')
-    const student = await getStudentByEmail(email.trim().toLowerCase())
-    if (!student) {
-      setError('No student found with this email. Please check and try again.')
-      setLoading(false); return
-    }
-    if (student.phone) {
-      setError('This account already has a phone number linked. Please use Login instead.')
-      setLoading(false); return
-    }
-    setFoundStudent(student)
+    setError('')
     setStep(2)
-    setLoading(false)
+  }
+
+  // Email method step 2→3: now we have both email + phone, fire everything in parallel
+  const handleEmailSendOtp = async (e) => {
+    e.preventDefault()
+    if (!phone.trim()) return
+    const formatted = formatPhone(phone)
+    if (formatted.length !== 12) {
+      setError('Please enter a valid 10-digit mobile number.')
+      return
+    }
+    setLoading(true); setError('')
+    try {
+      // Fire all lookups + OTP send in parallel to minimize wait on slow networks
+      const [student, existing, otpResult] = await Promise.all([
+        getStudentByEmail(email.trim().toLowerCase()),
+        getStudentByPhone(formatted),
+        sendOtp(formatted),
+      ])
+      if (!student) {
+        // Email issue — bounce back to step 1 so they can fix it
+        setStep(1)
+        setError('No student found with this email. Please check and try again.')
+        setLoading(false); return
+      }
+      if (student.phone) {
+        setStep(1)
+        setError('This account already has a phone number linked. Please use Login instead.')
+        setLoading(false); return
+      }
+      if (existing && existing.lead_id !== student.lead_id) {
+        setError('This phone number is already linked to another account.')
+        setLoading(false); return
+      }
+      if (!otpResult?.success) {
+        setError(otpResult?.error || 'Failed to send OTP. Please try again.')
+        setLoading(false); return
+      }
+      setFoundStudent(student)
+      setPhone(formatted)
+      setStep(3)
+      startResendTimer()
+    } catch {
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleLeadIdCheck = async (e) => {
@@ -230,7 +272,7 @@ function AuthScreen({ onSuccess }) {
     setLoading(false)
   }
 
-  const handleSignupSendOtp = async (e) => {
+  const handleLeadIdSendOtp = async (e) => {
     e.preventDefault()
     if (!phone.trim()) return
     setLoading(true); setError('')
@@ -239,13 +281,15 @@ function AuthScreen({ onSuccess }) {
       setError('Please enter a valid 10-digit mobile number.')
       setLoading(false); return
     }
-    // Check if phone already linked to someone else
-    const existing = await getStudentByPhone(formatted)
+    // Check if phone already linked to someone else + send OTP in parallel
+    const [existing, result] = await Promise.all([
+      getStudentByPhone(formatted),
+      sendOtp(formatted),
+    ])
     if (existing && existing.lead_id !== foundStudent.lead_id) {
       setError('This phone number is already linked to another account.')
       setLoading(false); return
     }
-    const result = await sendOtp(formatted)
     if (!result?.success) {
       setError(result?.error || 'Failed to send OTP. Please try again.')
       setLoading(false); return
@@ -266,11 +310,18 @@ function AuthScreen({ onSuccess }) {
         setError(result?.error || 'Invalid or expired OTP. Please try again.')
         setLoading(false); return
       }
-      await updateStudentPhone(foundStudent.lead_id, phone)
-      if (signupMethod === 'leadid' && !foundStudent.email && email.trim()) {
-        await updateStudentEmail(foundStudent.lead_id, email.trim().toLowerCase())
+      // Phone update is critical for future login — must await
+      // Email update can fire in background
+      const updatedEmail = (signupMethod === 'leadid' && !foundStudent.email && email.trim())
+        ? email.trim().toLowerCase() : null
+      if (updatedEmail) updateStudentEmail(foundStudent.lead_id, updatedEmail).catch(() => {})
+      const phoneOk = await updateStudentPhone(foundStudent.lead_id, phone)
+      if (!phoneOk) {
+        setError('Failed to link phone number. Please try again.')
+        setLoading(false); return
       }
-      const updated = await getStudent(foundStudent.lead_id)
+      // Build updated student locally — skip extra getStudent round-trip
+      const updated = { ...foundStudent, phone, ...(updatedEmail ? { email: updatedEmail } : {}) }
       onSuccess(updated)
     } catch {
       setError('Something went wrong. Please try again.')
@@ -280,6 +331,7 @@ function AuthScreen({ onSuccess }) {
   }
 
   // ---- Login handlers ----
+
   const handleLoginSendOtp = async (e) => {
     e.preventDefault()
     if (!phone.trim()) return
@@ -289,27 +341,32 @@ function AuthScreen({ onSuccess }) {
       setError('Please enter a valid 10-digit mobile number.')
       setLoading(false); return
     }
-    // Fire student lookup and OTP in parallel
+    // Track this attempt so stale background results are ignored
+    const attempt = ++loginSendRef.current
+    // Fire student lookup and OTP in parallel — don't await either yet
     studentPromiseRef.current = getStudentByPhone(formatted)
-    const result = await sendOtp(formatted)
-    if (!result?.success) {
-      setError(result?.error || 'Failed to send OTP. Please try again.')
-      setLoading(false); return
-    }
-    // OTP sent — show entry screen instantly
+    const otpPromise = sendOtp(formatted)
+    // Show OTP screen immediately — don't wait for network
     setPhone(formatted)
     setStep(2)
     startResendTimer()
     setLoading(false)
-    // Resolve student lookup in background
-    const student = await studentPromiseRef.current
+    // Resolve both in background while user sees the OTP screen
+    const [result, student] = await Promise.all([otpPromise, studentPromiseRef.current])
+    // If user navigated away (back button / new attempt), ignore stale results
+    if (attempt !== loginSendRef.current) return
+    if (!result?.success) {
+      setStep(1); setPhone(formatted.slice(-10))
+      setError(result?.error || 'Failed to send OTP. Please try again.')
+      return
+    }
     if (!student) {
-      setStep(1)
+      setStep(1); setPhone(formatted.slice(-10))
       setError('No account found with this number. Please sign up first.')
       return
     }
     setFoundStudent(student)
-    // Pre-fetch profile data while user types OTP (10-20s of idle time)
+    // Pre-fetch profile data while user types OTP
     prefetchedDataRef.current = Promise.all([
       getStudentProfiles(student.lead_id),
       ...SCORED_PLATFORMS.map(plat => loadAllProfiles(plat)),
@@ -395,7 +452,7 @@ function AuthScreen({ onSuccess }) {
               </div>
 
               {signupMethod === 'email' ? (
-                <form onSubmit={handleEmailCheck} className="space-y-4">
+                <form onSubmit={handleEmailNext} className="space-y-4">
                   <div>
                     <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
                       <Mail size={14} /> Enter your registered email
@@ -404,9 +461,9 @@ function AuthScreen({ onSuccess }) {
                       placeholder="your.email@example.com" autoFocus
                       className="w-full px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg" />
                   </div>
-                  <button type="submit" disabled={loading || !email.trim()}
+                  <button type="submit" disabled={!email.trim()}
                     className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
-                    {loading ? <Spinner /> : <>Continue <ArrowRight size={18} /></>}
+                    Continue <ArrowRight size={18} />
                   </button>
                 </form>
               ) : (
@@ -428,7 +485,38 @@ function AuthScreen({ onSuccess }) {
             </div>
           )}
 
-          {mode === 'signup' && step === 2 && (
+          {/* Email method step 2: collect phone number */}
+          {mode === 'signup' && signupMethod === 'email' && step === 2 && (
+            <div className="space-y-4">
+              <button onClick={() => { setStep(1); setError('') }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+                <ChevronLeft size={16} /> Back
+              </button>
+              <div className="bg-primary/5 rounded-xl px-4 py-2.5 flex items-center gap-2 text-sm text-primary/60">
+                <Mail size={14} /> {email}
+              </div>
+              <form onSubmit={handleEmailSendOtp} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
+                    <Phone size={14} /> Enter your WhatsApp number
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-primary/40 font-medium text-lg">+91</span>
+                    <input type="tel" value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); setError('') }}
+                      placeholder="9876543210" autoFocus maxLength={10}
+                      className="flex-1 px-4 py-3 border-2 border-primary/15 rounded-xl text-primary placeholder-primary/30 focus:outline-none focus:border-ambient focus:ring-2 focus:ring-ambient/20 text-lg tracking-wider" />
+                  </div>
+                  <p className="text-xs text-primary/40 mt-1.5">OTP will be sent via WhatsApp.</p>
+                </div>
+                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10}
+                  className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
+                  {loading ? <Spinner /> : <>Send OTP <ArrowRight size={18} /></>}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Lead ID method step 2: collect phone + optional email */}
+          {mode === 'signup' && signupMethod === 'leadid' && step === 2 && (
             <div className="space-y-4">
               <button onClick={() => setStep(1)} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
                 <ChevronLeft size={16} /> Back
@@ -438,8 +526,8 @@ function AuthScreen({ onSuccess }) {
                 <p className="text-xl font-bold text-primary">{foundStudent.student_name}</p>
                 {foundStudent.college && <p className="text-sm text-primary/50 mt-1">{foundStudent.college}</p>}
               </div>
-              <form onSubmit={handleSignupSendOtp} className="space-y-4">
-                {signupMethod === 'leadid' && !foundStudent.email && (
+              <form onSubmit={handleLeadIdSendOtp} className="space-y-4">
+                {!foundStudent.email && (
                   <div>
                     <label className="block text-sm font-semibold text-primary mb-2 flex items-center gap-1.5">
                       <Mail size={14} /> Enter your email
@@ -461,7 +549,7 @@ function AuthScreen({ onSuccess }) {
                   </div>
                   <p className="text-xs text-primary/40 mt-1.5">Must be a WhatsApp-enabled number. OTP will be sent via WhatsApp.</p>
                 </div>
-                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10 || (signupMethod === 'leadid' && !foundStudent.email && !email.trim())}
+                <button type="submit" disabled={loading || phone.replace(/\D/g, '').length !== 10 || (!foundStudent.email && !email.trim())}
                   className="w-full py-3.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-xl font-semibold text-lg transition-colors flex items-center justify-center gap-2">
                   {loading ? <Spinner /> : <>Send OTP <ArrowRight size={18} /></>}
                 </button>
@@ -469,9 +557,10 @@ function AuthScreen({ onSuccess }) {
             </div>
           )}
 
+          {/* Both methods step 3: OTP verification */}
           {mode === 'signup' && step === 3 && (
             <div className="space-y-4">
-              <button onClick={() => { setStep(2); setOtp('') }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+              <button onClick={() => { setStep(2); setOtp(''); setPhone(phone.slice(-10)) }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
                 <ChevronLeft size={16} /> Back
               </button>
               <div className="text-center">
@@ -522,7 +611,7 @@ function AuthScreen({ onSuccess }) {
 
           {mode === 'login' && step === 2 && (
             <div className="space-y-4">
-              <button onClick={() => { setStep(1); setOtp('') }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
+              <button onClick={() => { loginSendRef.current++; setStep(1); setOtp(''); setPhone(phone.slice(-10)) }} className="text-sm text-primary/50 hover:text-primary flex items-center gap-1 transition-colors">
                 <ChevronLeft size={16} /> Back
               </button>
               <div className="text-center">

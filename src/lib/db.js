@@ -547,17 +547,23 @@ export async function updateStudentField(leadId, field, value) {
 }
 
 export async function sendOtp(phone) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
   try {
     const res = await fetch('/api/send-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone }),
+      signal: controller.signal,
     })
     const data = await res.json()
     if (!res.ok) return { success: false, error: data.error || 'Failed to send OTP' }
     return data
   } catch (err) {
+    if (err.name === 'AbortError') return { success: false, error: 'Request timed out. Please try again.' }
     return { success: false, error: err.message }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
