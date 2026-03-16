@@ -472,6 +472,37 @@ async function processProfile(
       .eq('platform', platform)
 
     if (upsertError) return { ok: false, msg: `[ERR] ${platform}/${username}: ${upsertError.message}` }
+
+    // Save monthly snapshot
+    const now = new Date()
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const snapshotRow: Record<string, unknown> = {
+      lead_id,
+      platform,
+      month,
+      score,
+      cumulative_total: (stats as any).total_solved ?? (stats as any).problems_solved ?? 0,
+      easy: (stats as any).easy ?? 0,
+      medium: (stats as any).medium ?? 0,
+      hard: (stats as any).hard ?? 0,
+    }
+
+    // Count new problems this month from recentAcSubmissionList
+    if (platform === 'leetcode' && rawData.recentAcSubmissionList) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime() / 1000
+      const slugs = new Set<string>()
+      for (const sub of rawData.recentAcSubmissionList) {
+        const ts = parseInt(sub.timestamp)
+        if (ts >= monthStart && ts < monthEnd) slugs.add(sub.titleSlug)
+      }
+      snapshotRow.new_problems = slugs.size
+    }
+
+    await supabase
+      .from('profile_snapshots')
+      .upsert(snapshotRow, { onConflict: 'lead_id,platform,month' })
+
     return { ok: true, msg: `[OK] ${platform}/${username}` }
   } catch (err) {
     return { ok: false, msg: `[ERR] ${platform}/${username}: ${(err as Error).message}` }

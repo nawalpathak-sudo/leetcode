@@ -719,7 +719,23 @@ export async function bulkInsertPracticeProblems(problems) {
   return !error
 }
 
-// ---- Solved Map (which ALTA students solved which problems) ----
+// ---- Monthly Snapshots ----
+
+export async function loadMonthlySnapshots(platform = 'leetcode') {
+  const { data, error } = await supabase
+    .from('profile_snapshots')
+    .select('lead_id, platform, month, new_problems, cumulative_total, easy, medium, hard, students(student_name, college, batch)')
+    .eq('platform', platform)
+    .order('month')
+
+  if (error) { console.error('Load monthly snapshots error:', error); return [] }
+  return (data || []).map(row => ({
+    ...row,
+    college: row.students?.college || '',
+    batch: row.students?.batch || '',
+    student_name: row.students?.student_name || '',
+  }))
+}
 
 // ---- ProjectHub ----
 

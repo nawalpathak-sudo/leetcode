@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Search, User, MapPin, Trophy, Target, Award, Clock, Code, Star, Filter, X, Zap, CalendarDays, TrendingUp, GitCommitHorizontal, GitFork, Flame, GitPullRequest, FolderGit2 } from 'lucide-react'
-import { loadAllProfiles, loadProfile, searchProfiles } from '../lib/db'
+import { Search, User, MapPin, Trophy, Target, Award, Clock, Code, Star, Filter, X, Zap, CalendarDays, TrendingUp, GitCommitHorizontal, GitFork, Flame, GitPullRequest, FolderGit2, RefreshCw } from 'lucide-react'
+import { loadAllProfiles, loadProfile, searchProfiles, loadMonthlySnapshots, saveProfile } from '../lib/db'
+import { fetchLeetCodeData, fetchCodeforcesData, fetchGitHubData } from '../lib/api'
 import { calculateLeetCodeScore, calculateCodeforcesScore } from '../lib/scoring'
 import { computeRecentActivity, aggregateActivity, activeStudentCounts } from '../lib/activity'
 import SubmissionHeatmap from './SubmissionHeatmap'
@@ -131,11 +132,11 @@ function BatchDashboard({ platform, platformName, adminUser }) {
           No profiles match the selected filters.
         </div>
       ) : platform === 'leetcode' ? (
-        <LCBatchCharts data={filtered} platform={platform} platformName={platformName} />
+        <LCBatchCharts data={filtered} platform={platform} platformName={platformName} filterCollege={filterCollege} filterBatch={filterBatch} />
       ) : platform === 'github' ? (
         <GHBatchCharts data={filtered} platform={platform} platformName={platformName} />
       ) : (
-        <CFBatchCharts data={filtered} platform={platform} platformName={platformName} />
+        <CFBatchCharts data={filtered} platform={platform} platformName={platformName} filterCollege={filterCollege} filterBatch={filterBatch} />
       )}
     </div>
   )
@@ -250,9 +251,121 @@ function useSortable(defaultKey = 'score', defaultDir = 'desc') {
   return { sortKey, sortDir, toggle, sortFn }
 }
 
-function LCBatchCharts({ data, platform, platformName }) {
+function MonthlyProgression({ filterCollege, filterBatch, platform = 'leetcode' }) {
+  const [snapshots, setSnapshots] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      const data = await loadMonthlySnapshots(platform)
+      setSnapshots(data)
+      setLoading(false)
+    })()
+  }, [platform])
+
+  if (loading) return (
+    <ChartCard title="Monthly Progression — New Problems Solved">
+      <div className="text-center py-8">
+        <div className="inline-block h-6 w-6 animate-spin rounded-full border-4 border-ambient border-r-transparent" />
+      </div>
+    </ChartCard>
+  )
+
+  if (!snapshots.length) return null
+
+  // Filter by current college/batch filters
+  const filtered = snapshots.filter(s => {
+    if (filterCollege !== 'All' && s.college !== filterCollege) return false
+    if (filterBatch !== 'All' && s.batch !== filterBatch) return false
+    return true
+  })
+
+  // Group by campus+batch+month
+  const groups = {}
+  for (const s of filtered) {
+    const key = `${s.college}|${s.batch}`
+    if (!groups[key]) groups[key] = { campus: s.college, batch: s.batch }
+    groups[key][s.month] = (groups[key][s.month] || 0) + (s.new_problems || 0)
+  }
+
+  const months = [...new Set(filtered.map(s => s.month))].sort()
+  const MONTH_LABELS = {
+    '2025-12': 'Dec 25', '2026-01': 'Jan 26', '2026-02': 'Feb 26', '2026-03': 'Mar 26',
+    '2026-04': 'Apr 26', '2026-05': 'May 26', '2026-06': 'Jun 26',
+  }
+
+  const groupList = Object.values(groups).sort((a, b) =>
+    a.campus !== b.campus ? a.campus.localeCompare(b.campus) : a.batch.localeCompare(b.batch)
+  )
+
+  // Chart data: each month is an X entry, each campus-batch is a bar group
+  const chartData = months.map(m => {
+    const entry = { month: MONTH_LABELS[m] || m }
+    for (const g of groupList) {
+      entry[`${g.campus} ${g.batch}`] = g[m] || 0
+    }
+    return entry
+  })
+
+  const BAR_COLORS = ['#0D1E56', '#3BC3E2', '#22ACD1', '#6B7280', '#D1D5DB', '#0D1E56', '#3BC3E2']
+
+  return (
+    <ChartCard title="Monthly Progression — New Problems Solved (Campus × Batch)">
+      {/* Bar chart */}
+      <ResponsiveContainer width="100%" height={350}>
+        <BarChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+          <XAxis dataKey="month" stroke="#0D1E56" fontSize={13} fontWeight={600} />
+          <YAxis stroke="#0D1E56" />
+          <Tooltip contentStyle={CHART_TOOLTIP} />
+          <Legend />
+          {groupList.map((g, i) => (
+            <Bar key={`${g.campus} ${g.batch}`} dataKey={`${g.campus} ${g.batch}`}
+              fill={BAR_COLORS[i % BAR_COLORS.length]}
+              label={{ position: 'top', fill: '#0D1E56', fontSize: 11 }} />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+
+      {/* Summary table */}
+      <div className="overflow-x-auto mt-6">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-primary/10">
+              <th className="py-2 text-left font-medium text-primary/50">Campus</th>
+              <th className="py-2 text-left font-medium text-primary/50">Batch</th>
+              {months.map(m => (
+                <th key={m} className="py-2 text-right font-medium text-primary/50">{MONTH_LABELS[m] || m}</th>
+              ))}
+              <th className="py-2 text-right font-medium text-primary/50">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupList.map(g => {
+              const total = months.reduce((sum, m) => sum + (g[m] || 0), 0)
+              return (
+                <tr key={`${g.campus}-${g.batch}`} className="border-b border-primary/5 hover:bg-ambient/5 transition-colors">
+                  <td className="py-2 font-medium text-primary">{g.campus}</td>
+                  <td className="py-2 text-primary/70">{g.batch}</td>
+                  {months.map(m => (
+                    <td key={m} className="py-2 text-right font-semibold text-dark-ambient">{g[m] || 0}</td>
+                  ))}
+                  <td className="py-2 text-right font-bold text-primary">{total}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </ChartCard>
+  )
+}
+
+function LCBatchCharts({ data, platform, platformName, filterCollege = 'All', filterBatch = 'All' }) {
   const [modalProfile, setModalProfile] = useState(null)
   const [modalLoading, setModalLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const { sortKey, sortDir, toggle, sortFn } = useSortable('score', 'desc')
 
   const openProfile = async (username) => {
@@ -260,6 +373,19 @@ function LCBatchCharts({ data, platform, platformName }) {
     const full = await loadProfile(platform, username)
     setModalLoading(false)
     if (full?.raw_json) setModalProfile(full)
+  }
+
+  const refreshProfile = async () => {
+    if (!modalProfile || refreshing) return
+    setRefreshing(true)
+    try {
+      const rawData = await fetchLeetCodeData(modalProfile.username)
+      if (rawData) {
+        await saveProfile(modalProfile.lead_id, platform, modalProfile.username, rawData)
+        const updated = await loadProfile(platform, modalProfile.username)
+        if (updated?.raw_json) setModalProfile(updated)
+      }
+    } finally { setRefreshing(false) }
   }
 
   const buckets = makeBuckets(data, 'total_solved', [
@@ -273,7 +399,7 @@ function LCBatchCharts({ data, platform, platformName }) {
   return (
     <div className="space-y-6">
       {modalProfile && (
-        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'LeetCode'}>
+        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'LeetCode'} onRefresh={refreshProfile} refreshing={refreshing}>
           <LCProfile data={modalProfile.raw_json} />
         </ProfileModal>
       )}
@@ -287,6 +413,9 @@ function LCBatchCharts({ data, platform, platformName }) {
         <KPI label="Avg Score" value={avg(data, 'score').toFixed(1)} />
         <KPI label="Avg Contests" value={avg(data, 'contests_attended').toFixed(1)} />
       </div>
+
+      {/* Monthly Progression */}
+      <MonthlyProgression filterCollege={filterCollege} filterBatch={filterBatch} />
 
       {/* Recent Activity */}
       <ActivityDashboard data={data} platform="leetcode" />
@@ -369,9 +498,10 @@ function LCBatchCharts({ data, platform, platformName }) {
 
 // ---- Codeforces Batch ----
 
-function CFBatchCharts({ data, platform, platformName }) {
+function CFBatchCharts({ data, platform, platformName, filterCollege = 'All', filterBatch = 'All' }) {
   const [modalProfile, setModalProfile] = useState(null)
   const [modalLoading, setModalLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const { sortKey, sortDir, toggle, sortFn } = useSortable('score', 'desc')
 
   const openProfile = async (username) => {
@@ -379,6 +509,19 @@ function CFBatchCharts({ data, platform, platformName }) {
     const full = await loadProfile(platform, username)
     setModalLoading(false)
     if (full?.raw_json) setModalProfile(full)
+  }
+
+  const refreshProfile = async () => {
+    if (!modalProfile || refreshing) return
+    setRefreshing(true)
+    try {
+      const rawData = await fetchCodeforcesData(modalProfile.username)
+      if (rawData) {
+        await saveProfile(modalProfile.lead_id, platform, modalProfile.username, rawData)
+        const updated = await loadProfile(platform, modalProfile.username)
+        if (updated?.raw_json) setModalProfile(updated)
+      }
+    } finally { setRefreshing(false) }
   }
 
   const rankOrder = [
@@ -404,7 +547,7 @@ function CFBatchCharts({ data, platform, platformName }) {
   return (
     <div className="space-y-6">
       {modalProfile && (
-        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'Codeforces'}>
+        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'Codeforces'} onRefresh={refreshProfile} refreshing={refreshing}>
           <CFProfile data={modalProfile.raw_json} />
         </ProfileModal>
       )}
@@ -419,6 +562,9 @@ function CFBatchCharts({ data, platform, platformName }) {
         <KPI label="Avg Score" value={avg(data, 'score').toFixed(1)} />
         <KPI label="Avg Contests" value={avg(data, 'contests_attended').toFixed(1)} />
       </div>
+
+      {/* Monthly Progression */}
+      <MonthlyProgression filterCollege={filterCollege} filterBatch={filterBatch} platform="codeforces" />
 
       {/* Recent Activity */}
       <ActivityDashboard data={data} platform="codeforces" />
@@ -522,6 +668,7 @@ function CFBatchCharts({ data, platform, platformName }) {
 function GHBatchCharts({ data, platform, platformName }) {
   const [modalProfile, setModalProfile] = useState(null)
   const [modalLoading, setModalLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const { sortKey, sortDir, toggle, sortFn } = useSortable('total_commits', 'desc')
 
   const openProfile = async (username) => {
@@ -529,6 +676,19 @@ function GHBatchCharts({ data, platform, platformName }) {
     const full = await loadProfile(platform, username)
     setModalLoading(false)
     if (full?.raw_json) setModalProfile(full)
+  }
+
+  const refreshProfile = async () => {
+    if (!modalProfile || refreshing) return
+    setRefreshing(true)
+    try {
+      const rawData = await fetchGitHubData(modalProfile.username)
+      if (rawData) {
+        await saveProfile(modalProfile.lead_id, platform, modalProfile.username, rawData)
+        const updated = await loadProfile(platform, modalProfile.username)
+        if (updated?.raw_json) setModalProfile(updated)
+      }
+    } finally { setRefreshing(false) }
   }
 
   // Language aggregation across all students
@@ -555,7 +715,7 @@ function GHBatchCharts({ data, platform, platformName }) {
   return (
     <div className="space-y-6">
       {modalProfile && (
-        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'GitHub'}>
+        <ProfileModal onClose={() => setModalProfile(null)} platform={platformName || 'GitHub'} onRefresh={refreshProfile} refreshing={refreshing}>
           <GHProfile data={modalProfile.raw_json} />
         </ProfileModal>
       )}
@@ -1254,7 +1414,7 @@ function CFProfile({ data }) {
 // MODAL
 // ============================================================
 
-function ProfileModal({ onClose, platform, children }) {
+function ProfileModal({ onClose, platform, onRefresh, refreshing, children }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -1271,10 +1431,20 @@ function ProfileModal({ onClose, platform, children }) {
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 relative">
         <div className="sticky top-0 z-10 bg-white rounded-t-2xl border-b border-primary/10 px-6 py-4 flex items-center justify-between">
           <h3 className="text-lg font-bold text-primary">{platform} Profile</h3>
-          <button onClick={onClose}
-            className="p-2 rounded-lg hover:bg-primary/10 text-primary/50 hover:text-primary transition-colors">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            {onRefresh && (
+              <button onClick={onRefresh} disabled={refreshing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-ambient/10 text-dark-ambient hover:bg-ambient/20 disabled:opacity-50 transition-colors"
+                title="Refresh profile data">
+                <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
+                {refreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            )}
+            <button onClick={onClose}
+              className="p-2 rounded-lg hover:bg-primary/10 text-primary/50 hover:text-primary transition-colors">
+              <X size={20} />
+            </button>
+          </div>
         </div>
         <div className="p-6 max-h-[80vh] overflow-y-auto">
           {children}
