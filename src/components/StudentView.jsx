@@ -155,10 +155,10 @@ function ActivityDashboard({ data, platform }) {
       <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="bg-gradient-to-br from-ambient/10 to-ambient/5 rounded-xl p-4 border border-ambient/20">
           <div className="flex items-center gap-2 text-xs text-primary/50 font-medium mb-1">
-            <Zap size={14} className="text-dark-ambient" /> Today
+            <Zap size={14} className="text-dark-ambient" /> Yesterday
           </div>
-          <div className="text-3xl font-bold text-dark-ambient">{totals.today}</div>
-          <div className="text-xs text-primary/40 mt-1">{active.today} active student{active.today !== 1 ? 's' : ''}</div>
+          <div className="text-3xl font-bold text-dark-ambient">{totals.yesterday}</div>
+          <div className="text-xs text-primary/40 mt-1">{active.yesterday} active student{active.yesterday !== 1 ? 's' : ''}</div>
         </div>
         <div className="bg-gradient-to-br from-primary/5 to-primary/3 rounded-xl p-4 border border-primary/10">
           <div className="flex items-center gap-2 text-xs text-primary/50 font-medium mb-1">
@@ -190,7 +190,7 @@ function ActivityDashboard({ data, platform }) {
                 <thead>
                   <tr className="border-b border-primary/10 text-primary/50 text-xs">
                     <th className="py-2 text-left font-medium">Student</th>
-                    <th className="py-2 text-right font-medium">Today</th>
+                    <th className="py-2 text-right font-medium">Yesterday</th>
                     <th className="py-2 text-right font-medium">7 Days</th>
                     <th className="py-2 text-right font-medium">30 Days</th>
                   </tr>
@@ -203,7 +203,7 @@ function ActivityDashboard({ data, platform }) {
                         {p.college && <span className="text-xs text-primary/30 ml-2">{p.college}</span>}
                         {p.batch && <span className="text-xs text-primary/30 ml-2">{p.batch}</span>}
                       </td>
-                      <td className="py-1.5 text-right font-semibold">{p.activity?.today || 0}</td>
+                      <td className="py-1.5 text-right font-semibold">{p.activity?.yesterday || 0}</td>
                       <td className="py-1.5 text-right font-semibold">{p.activity?.last7 || 0}</td>
                       <td className="py-1.5 text-right font-bold text-dark-ambient">{p.activity?.last30 || 0}</td>
                     </tr>
@@ -1476,9 +1476,9 @@ function ActivityStrip({ activity, label }) {
       <div className="grid grid-cols-3 gap-4">
         <div className="text-center">
           <div className="text-xs text-primary/50 font-medium flex items-center justify-center gap-1 mb-1">
-            <Zap size={12} className="text-dark-ambient" /> Today
+            <Zap size={12} className="text-dark-ambient" /> Yesterday
           </div>
-          <div className="text-2xl font-bold text-dark-ambient">{activity.today}</div>
+          <div className="text-2xl font-bold text-dark-ambient">{activity.yesterday}</div>
           <div className="text-[10px] text-primary/30">{label}</div>
         </div>
         <div className="text-center border-x border-primary/10">

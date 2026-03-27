@@ -150,6 +150,8 @@ function extractStats(platform, rawData) {
     const submissions = rawData.submissions || []
     const solvedProblems = new Set()
     const problemRatings = []
+    const langMap = {}
+
     for (const sub of submissions) {
       if (sub.verdict === 'OK') {
         const problem = sub.problem || {}
@@ -158,15 +160,80 @@ function extractStats(platform, rawData) {
           if (problem.rating) problemRatings.push(problem.rating)
         }
       }
+      if (sub.programmingLanguage) {
+        langMap[sub.programmingLanguage] = (langMap[sub.programmingLanguage] || 0) + 1
+      }
     }
+
+    // Hack counts
+    const successfulHacks = user.hack?.successfulHackCount || 0
+    const unsuccessfulHacks = user.hack?.unsuccessfulHackCount || 0
+
+    // Contest type breakdown
+    const contestTypes = {}
+    for (const c of ratingHistory) {
+      const name = c.contestName || ''
+      let type = 'other'
+      if (/Div\.\s*1\b/i.test(name) && /Div\.\s*2\b/i.test(name)) type = 'div1+2'
+      else if (/Div\.\s*1\b/i.test(name)) type = 'div1'
+      else if (/Div\.\s*2\b/i.test(name)) type = 'div2'
+      else if (/Div\.\s*3\b/i.test(name)) type = 'div3'
+      else if (/Div\.\s*4\b/i.test(name)) type = 'div4'
+      else if (/Educational/i.test(name)) type = 'educational'
+      else if (/Global/i.test(name)) type = 'global'
+      contestTypes[type] = (contestTypes[type] || 0) + 1
+    }
+
+    // Rating trend from last 5 contests
+    const last5 = ratingHistory.slice(-5)
+    let ratingTrend = 'stable'
+    if (last5.length >= 2) {
+      const delta = (last5[last5.length - 1].newRating || 0) - (last5[0].oldRating || last5[0].newRating || 0)
+      if (delta > 50) ratingTrend = 'improving'
+      else if (delta < -50) ratingTrend = 'declining'
+    }
+
+    // Rating color
+    const r = user.rating || 0
+    const ratingColor = r >= 3000 ? 'legendary-grandmaster'
+      : r >= 2400 ? 'international-grandmaster'
+      : r >= 2100 ? 'grandmaster'
+      : r >= 1900 ? 'master'
+      : r >= 1600 ? 'expert'
+      : r >= 1400 ? 'specialist'
+      : r >= 1200 ? 'pupil'
+      : 'newbie'
+
+    // Top languages
+    const languages = Object.entries(langMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }))
+
+    // Best contest rank
+    let bestContestRank = 0
+    for (const c of ratingHistory) {
+      if (c.rank && (!bestContestRank || c.rank < bestContestRank)) {
+        bestContestRank = c.rank
+      }
+    }
+
     return {
       rating: user.rating || 0,
       max_rating: user.maxRating || user.rating || 0,
       rank: user.rank || 'unrated',
+      rating_color: ratingColor,
       problems_solved: solvedProblems.size,
       contests_attended: ratingHistory.length,
       avg_problem_rating: problemRatings.length
         ? Math.round(problemRatings.reduce((a, b) => a + b, 0) / problemRatings.length) : 0,
+      contribution: user.contribution || 0,
+      successful_hacks: successfulHacks,
+      unsuccessful_hacks: unsuccessfulHacks,
+      best_contest_rank: bestContestRank,
+      rating_trend: ratingTrend,
+      contest_types: contestTypes,
+      languages,
     }
   }
 

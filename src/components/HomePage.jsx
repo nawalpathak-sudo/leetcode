@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronRight, Trophy, Code2, Users, Zap, ExternalLink, Play, Sparkles, ArrowRight, Star, TrendingUp, Target, Flame, Award, Crown, CalendarDays } from 'lucide-react'
-import { loadAllProfiles } from '../lib/db'
+import { loadAllProfiles, invalidateProfileCache } from '../lib/db'
 import { computeRecentActivity } from '../lib/activity'
 
 // ---- CONFIG: Edit these to update banners & content ----
@@ -238,104 +238,135 @@ export default function HomePage() {
   const [stats, setStats] = useState({ students: 0, solved: 0, contests: 0, topScore: 0 })
   const [insights, setInsights] = useState(null)
 
+  const fetchData = useRef(null)
+  fetchData.current = async () => {
+    const [lc, cf] = await Promise.all([
+      loadAllProfiles('leetcode', { includeRaw: true }),
+      loadAllProfiles('codeforces', { includeRaw: true })
+    ])
+    const map = new Map()
+
+    for (const p of [...lc, ...cf]) {
+      // Skip profiles that have never been fetched (no data yet)
+      if (!p.fetched_at) continue
+
+      if (!map.has(p.lead_id)) {
+        map.set(p.lead_id, {
+          lead_id: p.lead_id, student_name: p.student_name, college: p.college, batch: p.batch,
+          student_username: p.student_username,
+          lc_score: 0, cf_score: 0, total_score: 0, lc_solved: 0, cf_solved: 0, cf_rating: 0,
+          lc_easy: 0, lc_medium: 0, lc_hard: 0, lc_contest_rating: 0, cf_max_rating: 0,
+          contests: 0,
+        })
+      }
+      const s = map.get(p.lead_id)
+      if (p.platform === 'leetcode') {
+        s.lc_score = p.score || 0
+        s.lc_solved = p.total_solved || 0
+        s.lc_easy = p.easy || 0
+        s.lc_medium = p.medium || 0
+        s.lc_hard = p.hard || 0
+        s.lc_contest_rating = p.contest_rating || 0
+        s.contests += p.contests_attended || 0
+      } else {
+        s.cf_score = p.score || 0
+        s.cf_solved = p.problems_solved || 0
+        s.cf_rating = p.rating || 0
+        s.cf_max_rating = p.max_rating || 0
+        s.contests += p.contests_attended || 0
+      }
+      s.total_score = s.lc_score + s.cf_score
+    }
+
+    // Filter out students with zero total score (no meaningful data)
+    const all = [...map.values()].filter(s => s.total_score > 0).sort((a, b) => b.total_score - a.total_score)
+    setLeaderboard(all)
+
+    const batchSet = new Set(all.map(s => s.batch).filter(Boolean))
+    setBatches([...batchSet].sort())
+
+    setStats({
+      students: all.length,
+      solved: all.reduce((sum, s) => sum + s.lc_solved + s.cf_solved, 0),
+      contests: all.reduce((sum, s) => sum + s.contests, 0),
+      topScore: all[0]?.total_score || 0,
+    })
+
+    // Compute insights only from students with actual scores
+    const lcStudents = all.filter(s => s.lc_score > 0)
+    const cfStudents = all.filter(s => s.cf_score > 0)
+
+    const totalEasy = all.reduce((s, x) => s + x.lc_easy, 0)
+    const totalMedium = all.reduce((s, x) => s + x.lc_medium, 0)
+    const totalHard = all.reduce((s, x) => s + x.lc_hard, 0)
+
+    const topLcSolver = [...all].sort((a, b) => b.lc_solved - a.lc_solved)[0]
+    const topCfRating = [...all].filter(s => s.cf_max_rating > 0).sort((a, b) => b.cf_max_rating - a.cf_max_rating)[0]
+    const topContester = [...all].sort((a, b) => b.contests - a.contests)[0]
+    const avgLcScore = lcStudents.length ? Math.round(lcStudents.reduce((s, x) => s + x.lc_score, 0) / lcStudents.length) : 0
+    const avgCfScore = cfStudents.length ? Math.round(cfStudents.reduce((s, x) => s + x.cf_score, 0) / cfStudents.length) : 0
+
+    setInsights({
+      totalEasy, totalMedium, totalHard,
+      topLcSolver, topCfRating, topContester,
+      avgLcScore, avgCfScore,
+    })
+
+    // Compute weekly activity leaderboard (only from fetched profiles)
+    const weeklyData = []
+    for (const p of [...lc, ...cf]) {
+      if (!p.raw_json || !p.fetched_at) continue
+      const activity = computeRecentActivity(p.raw_json, p.platform)
+      if (!activity.last7) continue
+
+      let existing = weeklyData.find(w => w.lead_id === p.lead_id)
+      if (!existing) {
+        existing = {
+          lead_id: p.lead_id,
+          student_name: p.student_name,
+          college: p.college,
+          batch: p.batch,
+          lc_last7: 0,
+          cf_last7: 0,
+          total_last7: 0,
+        }
+        weeklyData.push(existing)
+      }
+      if (p.platform === 'leetcode') {
+        existing.lc_last7 = activity.last7
+      } else {
+        existing.cf_last7 = activity.last7
+      }
+      existing.total_last7 = existing.lc_last7 + existing.cf_last7
+    }
+    setWeeklyLeaderboard(weeklyData.sort((a, b) => b.total_last7 - a.total_last7).slice(0, 20))
+
+    setLoading(false)
+  }
+
+  // Initial load + refresh on tab focus + 5-minute interval
   useEffect(() => {
-    ;(async () => {
-      const [lc, cf] = await Promise.all([
-        loadAllProfiles('leetcode', { includeRaw: true }),
-        loadAllProfiles('codeforces', { includeRaw: true })
-      ])
-      const map = new Map()
+    fetchData.current()
 
-      for (const p of [...lc, ...cf]) {
-        if (!map.has(p.lead_id)) {
-          map.set(p.lead_id, {
-            lead_id: p.lead_id, student_name: p.student_name, college: p.college, batch: p.batch,
-            student_username: p.student_username,
-            lc_score: 0, cf_score: 0, total_score: 0, lc_solved: 0, cf_solved: 0, cf_rating: 0,
-            lc_easy: 0, lc_medium: 0, lc_hard: 0, lc_contest_rating: 0, cf_max_rating: 0,
-            contests: 0,
-          })
-        }
-        const s = map.get(p.lead_id)
-        if (p.platform === 'leetcode') {
-          s.lc_score = p.score || 0
-          s.lc_solved = p.total_solved || 0
-          s.lc_easy = p.easy || 0
-          s.lc_medium = p.medium || 0
-          s.lc_hard = p.hard || 0
-          s.lc_contest_rating = p.contest_rating || 0
-          s.contests += p.contests_attended || 0
-        } else {
-          s.cf_score = p.score || 0
-          s.cf_solved = p.problems_solved || 0
-          s.cf_rating = p.rating || 0
-          s.cf_max_rating = p.max_rating || 0
-          s.contests += p.contests_attended || 0
-        }
-        s.total_score = s.lc_score + s.cf_score
+    // Refresh when user returns to the tab
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        invalidateProfileCache()
+        fetchData.current()
       }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
 
-      const all = [...map.values()].sort((a, b) => b.total_score - a.total_score)
-      setLeaderboard(all)
+    // Periodic refresh every 5 minutes
+    const interval = setInterval(() => {
+      invalidateProfileCache()
+      fetchData.current()
+    }, 5 * 60 * 1000)
 
-      const batchSet = new Set(all.map(s => s.batch).filter(Boolean))
-      setBatches([...batchSet].sort())
-
-      setStats({
-        students: all.length,
-        solved: all.reduce((sum, s) => sum + s.lc_solved + s.cf_solved, 0),
-        contests: all.reduce((sum, s) => sum + s.contests, 0),
-        topScore: all[0]?.total_score || 0,
-      })
-
-      // Compute insights
-      const totalEasy = all.reduce((s, x) => s + x.lc_easy, 0)
-      const totalMedium = all.reduce((s, x) => s + x.lc_medium, 0)
-      const totalHard = all.reduce((s, x) => s + x.lc_hard, 0)
-
-      const topLcSolver = [...all].sort((a, b) => b.lc_solved - a.lc_solved)[0]
-      const topCfRating = [...all].filter(s => s.cf_max_rating > 0).sort((a, b) => b.cf_max_rating - a.cf_max_rating)[0]
-      const topContester = [...all].sort((a, b) => b.contests - a.contests)[0]
-      const avgLcScore = all.length ? Math.round(all.reduce((s, x) => s + x.lc_score, 0) / all.length) : 0
-      const avgCfScore = all.length ? Math.round(all.reduce((s, x) => s + x.cf_score, 0) / all.length) : 0
-
-      setInsights({
-        totalEasy, totalMedium, totalHard,
-        topLcSolver, topCfRating, topContester,
-        avgLcScore, avgCfScore,
-      })
-
-      // Compute weekly activity leaderboard
-      const weeklyData = []
-      for (const p of [...lc, ...cf]) {
-        if (!p.raw_json) continue
-        const activity = computeRecentActivity(p.raw_json, p.platform)
-        if (!activity.last7) continue
-
-        let existing = weeklyData.find(w => w.lead_id === p.lead_id)
-        if (!existing) {
-          existing = {
-            lead_id: p.lead_id,
-            student_name: p.student_name,
-            college: p.college,
-            batch: p.batch,
-            lc_last7: 0,
-            cf_last7: 0,
-            total_last7: 0,
-          }
-          weeklyData.push(existing)
-        }
-        if (p.platform === 'leetcode') {
-          existing.lc_last7 = activity.last7
-        } else {
-          existing.cf_last7 = activity.last7
-        }
-        existing.total_last7 = existing.lc_last7 + existing.cf_last7
-      }
-      setWeeklyLeaderboard(weeklyData.sort((a, b) => b.total_last7 - a.total_last7).slice(0, 20))
-
-      setLoading(false)
-    })()
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      clearInterval(interval)
+    }
   }, [])
 
   const filtered = leaderboard.filter(s => {

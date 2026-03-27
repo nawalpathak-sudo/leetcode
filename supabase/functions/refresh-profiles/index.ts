@@ -340,6 +340,10 @@ function extractStats(platform: string, rawData: any) {
     const submissions = rawData.submissions || []
     const solvedProblems = new Set<string>()
     const problemRatings: number[] = []
+    const langMap: Record<string, number> = {}
+    let successfulHacks = 0
+    let unsuccessfulHacks = 0
+
     for (const sub of submissions) {
       if (sub.verdict === 'OK') {
         const problem = sub.problem || {}
@@ -348,15 +352,81 @@ function extractStats(platform: string, rawData: any) {
           if (problem.rating) problemRatings.push(problem.rating)
         }
       }
+      // Track language usage
+      if (sub.programmingLanguage) {
+        langMap[sub.programmingLanguage] = (langMap[sub.programmingLanguage] || 0) + 1
+      }
     }
+
+    // Hack count from user info
+    successfulHacks = user.hack?.successfulHackCount || 0
+    unsuccessfulHacks = user.hack?.unsuccessfulHackCount || 0
+
+    // Contest type breakdown from rating history
+    const contestTypes: Record<string, number> = {}
+    for (const c of ratingHistory) {
+      const name = c.contestName || ''
+      let type = 'other'
+      if (/Div\.\s*1\b/i.test(name) && /Div\.\s*2\b/i.test(name)) type = 'div1+2'
+      else if (/Div\.\s*1\b/i.test(name)) type = 'div1'
+      else if (/Div\.\s*2\b/i.test(name)) type = 'div2'
+      else if (/Div\.\s*3\b/i.test(name)) type = 'div3'
+      else if (/Div\.\s*4\b/i.test(name)) type = 'div4'
+      else if (/Educational/i.test(name)) type = 'educational'
+      else if (/Global/i.test(name)) type = 'global'
+      contestTypes[type] = (contestTypes[type] || 0) + 1
+    }
+
+    // Rating trend from last 5 contests
+    const last5 = ratingHistory.slice(-5)
+    let ratingTrend = 'stable'
+    if (last5.length >= 2) {
+      const delta = (last5[last5.length - 1].newRating || 0) - (last5[0].oldRating || last5[0].newRating || 0)
+      if (delta > 50) ratingTrend = 'improving'
+      else if (delta < -50) ratingTrend = 'declining'
+    }
+
+    // Rating color from current rating
+    const r = user.rating || 0
+    const ratingColor = r >= 3000 ? 'legendary-grandmaster'
+      : r >= 2400 ? 'international-grandmaster'
+      : r >= 2100 ? 'grandmaster'
+      : r >= 1900 ? 'master'
+      : r >= 1600 ? 'expert'
+      : r >= 1400 ? 'specialist'
+      : r >= 1200 ? 'pupil'
+      : 'newbie'
+
+    // Top languages
+    const languages = Object.entries(langMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }))
+
+    // Best rank in any contest
+    let bestContestRank = 0
+    for (const c of ratingHistory) {
+      if (c.rank && (!bestContestRank || c.rank < bestContestRank)) {
+        bestContestRank = c.rank
+      }
+    }
+
     return {
       rating: user.rating || 0,
       max_rating: user.maxRating || user.rating || 0,
       rank: user.rank || 'unrated',
+      rating_color: ratingColor,
       problems_solved: solvedProblems.size,
       contests_attended: ratingHistory.length,
       avg_problem_rating: problemRatings.length
         ? Math.round(problemRatings.reduce((a: number, b: number) => a + b, 0) / problemRatings.length) : 0,
+      contribution: user.contribution || 0,
+      successful_hacks: successfulHacks,
+      unsuccessful_hacks: unsuccessfulHacks,
+      best_contest_rank: bestContestRank,
+      rating_trend: ratingTrend,
+      contest_types: contestTypes,
+      languages,
     }
   }
 
@@ -487,16 +557,33 @@ async function processProfile(
       hard: (stats as any).hard ?? 0,
     }
 
-    // Count new problems this month from recentAcSubmissionList
+    // Count new problems solved this month
+    const monthStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    const monthEndDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+    const monthStartSec = monthStartDate.getTime() / 1000
+    const monthEndSec = monthEndDate.getTime() / 1000
+
     if (platform === 'leetcode' && rawData.recentAcSubmissionList) {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000
-      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime() / 1000
       const slugs = new Set<string>()
       for (const sub of rawData.recentAcSubmissionList) {
         const ts = parseInt(sub.timestamp)
-        if (ts >= monthStart && ts < monthEnd) slugs.add(sub.titleSlug)
+        if (ts >= monthStartSec && ts < monthEndSec) slugs.add(sub.titleSlug)
       }
       snapshotRow.new_problems = slugs.size
+    }
+
+    if (platform === 'codeforces' && rawData.submissions) {
+      const solved = new Set<string>()
+      for (const sub of rawData.submissions) {
+        if (sub.verdict !== 'OK') continue
+        const p = sub.problem
+        if (!p?.contestId || !p?.index) continue
+        const ts = sub.creationTimeSeconds
+        if (ts >= monthStartSec && ts < monthEndSec) {
+          solved.add(`${p.contestId}-${p.index}`)
+        }
+      }
+      snapshotRow.new_problems = solved.size
     }
 
     await supabase
@@ -521,7 +608,7 @@ serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}))
     const filterPlatform: string | undefined = body.platform // optional: 'leetcode' | 'codeforces' | 'github'
-    const batchSize: number = body.batch_size || 10 // how many to process per call
+    const batchSize: number = body.batch_size || 50 // how many to process per call
     const offset: number = body.offset || 0
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -566,6 +653,31 @@ serve(async (req) => {
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     const hasMore = offset + batchSize < totalAll
+
+    // Auto-chain: if there are more profiles, trigger the next batch automatically
+    if (hasMore) {
+      const nextOffset = offset + batchSize
+      log.push(`[CHAIN] Triggering next batch at offset=${nextOffset}`)
+      try {
+        await fetch(`${supabaseUrl}/functions/v1/refresh-profiles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({
+            platform: filterPlatform,
+            batch_size: batchSize,
+            offset: nextOffset,
+          }),
+        })
+      } catch (chainErr) {
+        log.push(`[CHAIN-ERR] Failed to trigger next batch: ${(chainErr as Error).message}`)
+      }
+    } else {
+      log.push(`[DONE] All ${totalAll} profiles processed across all batches`)
+    }
+
     const summary = {
       total: totalAll,
       processed: profiles.length,

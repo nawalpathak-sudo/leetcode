@@ -12,22 +12,35 @@ function daysBetween(a, b) {
 
 export function computeRecentActivity(rawJson, platform) {
   const now = startOfDayUTC(new Date())
-  const result = { today: 0, last7: 0, last30: 0 }
+  const result = { yesterday: 0, last7: 0, last30: 0 }
 
   if (platform === 'leetcode') {
-    const acSubs = rawJson?.recentAcSubmissionList || []
-    const seen7 = new Set()
-    const seen30 = new Set()
-    const seenToday = new Set()
-
-    for (const sub of acSubs) {
-      if (!sub.titleSlug || !sub.timestamp) continue
-      const day = startOfDayUTC(new Date(parseInt(sub.timestamp) * 1000))
-      const diff = daysBetween(day, now)
-
-      if (diff === 0 && !seenToday.has(sub.titleSlug)) { seenToday.add(sub.titleSlug); result.today++ }
-      if (diff >= 0 && diff < 7 && !seen7.has(sub.titleSlug)) { seen7.add(sub.titleSlug); result.last7++ }
-      if (diff >= 0 && diff < 30 && !seen30.has(sub.titleSlug)) { seen30.add(sub.titleSlug); result.last30++ }
+    // Use submissionCalendar (full year of daily counts) for accurate 7/30 day totals
+    const calendar = rawJson?.matchedUser?.submissionCalendar
+    if (calendar) {
+      const calData = typeof calendar === 'string' ? JSON.parse(calendar) : calendar
+      for (const [ts, count] of Object.entries(calData)) {
+        if (!count) continue
+        const day = startOfDayUTC(new Date(parseInt(ts) * 1000))
+        const diff = daysBetween(day, now)
+        if (diff === 1) result.yesterday += count
+        if (diff >= 0 && diff < 7) result.last7 += count
+        if (diff >= 0 && diff < 30) result.last30 += count
+      }
+    } else {
+      // Fallback to recentAcSubmissionList if calendar not available
+      const acSubs = rawJson?.recentAcSubmissionList || []
+      const seenYesterday = new Set()
+      const seen7 = new Set()
+      const seen30 = new Set()
+      for (const sub of acSubs) {
+        if (!sub.titleSlug || !sub.timestamp) continue
+        const day = startOfDayUTC(new Date(parseInt(sub.timestamp) * 1000))
+        const diff = daysBetween(day, now)
+        if (diff === 1 && !seenYesterday.has(sub.titleSlug)) { seenYesterday.add(sub.titleSlug); result.yesterday++ }
+        if (diff >= 0 && diff < 7 && !seen7.has(sub.titleSlug)) { seen7.add(sub.titleSlug); result.last7++ }
+        if (diff >= 0 && diff < 30 && !seen30.has(sub.titleSlug)) { seen30.add(sub.titleSlug); result.last30++ }
+      }
     }
   }
 
@@ -35,7 +48,7 @@ export function computeRecentActivity(rawJson, platform) {
     const subs = rawJson?.submissions || []
     const seen7 = new Set()
     const seen30 = new Set()
-    const seenToday = new Set()
+    const seenYesterday = new Set()
 
     for (const sub of subs) {
       if (sub.verdict !== 'OK') continue
@@ -45,7 +58,7 @@ export function computeRecentActivity(rawJson, platform) {
       const day = startOfDayUTC(new Date(sub.creationTimeSeconds * 1000))
       const diff = daysBetween(day, now)
 
-      if (diff === 0 && !seenToday.has(key)) { seenToday.add(key); result.today++ }
+      if (diff === 1 && !seenYesterday.has(key)) { seenYesterday.add(key); result.yesterday++ }
       if (diff >= 0 && diff < 7 && !seen7.has(key)) { seen7.add(key); result.last7++ }
       if (diff >= 0 && diff < 30 && !seen30.has(key)) { seen30.add(key); result.last30++ }
     }
@@ -57,7 +70,7 @@ export function computeRecentActivity(rawJson, platform) {
       if (!count) continue
       const day = startOfDayUTC(new Date(dateStr + 'T00:00:00'))
       const diff = daysBetween(day, now)
-      if (diff === 0) result.today += count
+      if (diff === 1) result.yesterday += count
       if (diff >= 0 && diff < 7) result.last7 += count
       if (diff >= 0 && diff < 30) result.last30 += count
     }
@@ -68,9 +81,9 @@ export function computeRecentActivity(rawJson, platform) {
 
 // Aggregate activity across multiple students
 export function aggregateActivity(activities) {
-  const agg = { today: 0, last7: 0, last30: 0 }
+  const agg = { yesterday: 0, last7: 0, last30: 0 }
   for (const a of activities) {
-    agg.today += a.today
+    agg.yesterday += a.yesterday
     agg.last7 += a.last7
     agg.last30 += a.last30
   }
@@ -80,7 +93,7 @@ export function aggregateActivity(activities) {
 // Count how many students were active in each period
 export function activeStudentCounts(activities) {
   return {
-    today: activities.filter(a => a.today > 0).length,
+    yesterday: activities.filter(a => a.yesterday > 0).length,
     last7: activities.filter(a => a.last7 > 0).length,
     last30: activities.filter(a => a.last30 > 0).length,
   }

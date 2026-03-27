@@ -71,14 +71,18 @@ async function main() {
   console.log(`Inserting ${allRows.length} snapshot rows...\n`)
 
   // Upsert in batches
+  const upsertHeaders = {
+    ...headers,
+    'Prefer': 'resolution=merge-duplicates,return=minimal',
+  }
   for (let i = 0; i < allRows.length; i += 50) {
     const chunk = allRows.slice(i, i + 50)
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/profile_snapshots`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/profile_snapshots?on_conflict=lead_id,platform,month`, {
       method: 'POST',
-      headers,
+      headers: upsertHeaders,
       body: JSON.stringify(chunk),
     })
-    if (!res.ok) console.error(`Insert error:`, res.status, await res.text())
+    if (!res.ok) console.error(`Upsert error:`, res.status, await res.text())
   }
 
   // Print summary

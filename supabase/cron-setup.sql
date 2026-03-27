@@ -16,13 +16,24 @@
 create extension if not exists pg_cron with schema pg_catalog;
 create extension if not exists pg_net with schema extensions;
 
--- Step 2: Remove old combined job if it exists
-select cron.unschedule('refresh-coding-profiles');
+-- Step 2: Remove old jobs if they exist (safe to ignore errors)
+DO $$ BEGIN
+  PERFORM cron.unschedule('refresh-coding-profiles');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+DO $$ BEGIN
+  PERFORM cron.unschedule('refresh-leetcode-profiles');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+DO $$ BEGIN
+  PERFORM cron.unschedule('refresh-codeforces-profiles');
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
--- Step 3: Schedule LeetCode refresh at midnight UTC daily
+-- Step 3: Schedule LeetCode refresh at midnight IST (18:30 UTC) daily
 select cron.schedule(
   'refresh-leetcode-profiles',
-  '0 0 * * *',                        -- midnight UTC
+  '30 18 * * *',                      -- 18:30 UTC = 00:00 IST
   $$
   select net.http_post(
     url := current_setting('app.settings.supabase_url') || '/functions/v1/refresh-profiles',
@@ -35,10 +46,10 @@ select cron.schedule(
   $$
 );
 
--- Step 4: Schedule Codeforces refresh at 1 AM UTC daily
+-- Step 4: Schedule Codeforces refresh at 1 AM IST (19:30 UTC) daily
 select cron.schedule(
   'refresh-codeforces-profiles',
-  '0 1 * * *',                        -- 1 AM UTC
+  '30 19 * * *',                      -- 19:30 UTC = 01:00 IST
   $$
   select net.http_post(
     url := current_setting('app.settings.supabase_url') || '/functions/v1/refresh-profiles',
