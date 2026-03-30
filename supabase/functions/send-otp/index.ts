@@ -130,7 +130,7 @@ serve(async (req) => {
         body: JSON.stringify({
           sender,
           to: phone,
-          template_id: 'algoarena_1_otp_i86q1d8ae5z8kw3f',
+          template_id: 'algoarena_new_opt',
           sample: { otp },
         }),
       },
