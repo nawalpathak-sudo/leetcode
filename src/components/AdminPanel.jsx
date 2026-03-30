@@ -251,8 +251,70 @@ function StudentImport({ platforms = [], adminUser }) {
     if (e.key === 'Escape') { setEditingDetail(null); setDetailValue('') }
   }
 
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [addForm, setAddForm] = useState({ lead_id: '', student_name: '', email: '', college: '', batch: '' })
+  const [addSaving, setAddSaving] = useState(false)
+  const [addResult, setAddResult] = useState(null)
+
+  const handleAddStudent = async () => {
+    if (!addForm.lead_id.trim()) { setAddResult('Lead ID is required.'); return }
+    setAddSaving(true)
+    setAddResult(null)
+    const ok = await upsertStudents([{
+      lead_id: addForm.lead_id.trim(),
+      student_name: addForm.student_name.trim(),
+      email: addForm.email.trim(),
+      college: addForm.college.trim(),
+      batch: addForm.batch.trim(),
+    }])
+    if (ok) {
+      setAddResult('Student added successfully.')
+      setAddForm({ lead_id: '', student_name: '', email: '', college: '', batch: '' })
+      await loadData()
+    } else {
+      setAddResult('Error adding student.')
+    }
+    setAddSaving(false)
+  }
+
   return (
     <div className="space-y-6">
+      {/* Add Individual Student */}
+      <div className="bg-white rounded-xl p-6 space-y-4 border border-primary/10 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-lg text-primary">Add Individual Student</h3>
+          <button onClick={() => { setShowAddForm(!showAddForm); setAddResult(null) }}
+            className="px-4 py-2 bg-ambient hover:bg-dark-ambient text-white rounded-lg font-medium text-sm transition-colors">
+            {showAddForm ? 'Cancel' : '+ Add Student'}
+          </button>
+        </div>
+        {showAddForm && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <input placeholder="Lead ID *" value={addForm.lead_id} onChange={e => setAddForm(f => ({ ...f, lead_id: e.target.value }))}
+                className="px-3 py-2 border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient" />
+              <input placeholder="Student Name" value={addForm.student_name} onChange={e => setAddForm(f => ({ ...f, student_name: e.target.value }))}
+                className="px-3 py-2 border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient" />
+              <input placeholder="Email" value={addForm.email} onChange={e => setAddForm(f => ({ ...f, email: e.target.value }))}
+                className="px-3 py-2 border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient" />
+              <input placeholder="College" value={addForm.college} onChange={e => setAddForm(f => ({ ...f, college: e.target.value }))}
+                className="px-3 py-2 border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient" />
+              <input placeholder="Batch" value={addForm.batch} onChange={e => setAddForm(f => ({ ...f, batch: e.target.value }))}
+                className="px-3 py-2 border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient" />
+            </div>
+            {addResult && (
+              <div className={`px-4 py-3 rounded-lg text-sm ${
+                addResult.includes('Error') ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-green-50 border border-green-200 text-green-800'
+              }`}>{addResult}</div>
+            )}
+            <button onClick={handleAddStudent} disabled={addSaving}
+              className="px-6 py-2.5 bg-primary hover:bg-primary/90 disabled:bg-primary/40 text-white rounded-lg font-medium transition-colors">
+              {addSaving ? 'Adding...' : 'Add Student'}
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* CSV Upload */}
       <div className="bg-white rounded-xl p-6 space-y-4 border border-primary/10 shadow-sm">
         <h3 className="font-semibold text-lg text-primary">Upload Students CSV</h3>
