@@ -1,7 +1,0 @@
-module.exports=[63296,a=>{a.v({className:"be_vietnam_pro_c8579499-module__n2ueBG__className",variable:"be_vietnam_pro_c8579499-module__n2ueBG__variable"})},26062,a=>{"use strict";var b=a.i(9790),c=a.i(63296);let d={className:c.default.className,style:{fontFamily:"'Be Vietnam Pro', 'Be Vietnam Pro Fallback'",fontStyle:"normal"}};null!=c.default.variable&&(d.variable=c.default.variable),a.s(["default",0,function({children:a}){return(0,b.jsxs)("html",{lang:"en",children:[(0,b.jsx)("head",{children:(0,b.jsx)("script",{dangerouslySetInnerHTML:{__html:`(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-            new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-            j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-            'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-            })(window,document,'script','dataLayer','GTM-TVGS7KKW');`}})}),(0,b.jsxs)("body",{className:`${d.variable} font-sans antialiased`,children:[(0,b.jsx)("noscript",{children:(0,b.jsx)("iframe",{src:"https://www.googletagmanager.com/ns.html?id=GTM-TVGS7KKW",height:"0",width:"0",style:{display:"none",visibility:"hidden"}})}),a]})]})},"metadata",0,{title:"ALTA Experience Center",description:"ALTA School of Technology — Experience Center",icons:{icon:"/favicon.png",apple:"/alta-icon.png"},openGraph:{images:["/alta-logo-dark.png"]}}],26062)},94016,a=>{a.n(a.i(26062))}];
-
-//# sourceMappingURL=%5Broot-of-the-server%5D__0acqvkg._.js.map
