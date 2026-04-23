@@ -1,0 +1,262 @@
+{
+  "version": 3,
+  "pages404": true,
+  "appType": "app",
+  "caseSensitive": false,
+  "basePath": "",
+  "redirects": [
+    {
+      "source": "/:path+/",
+      "destination": "/:path+",
+      "internal": true,
+      "priority": true,
+      "statusCode": 308,
+      "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"
+    }
+  ],
+  "headers": [],
+  "onMatchHeaders": [],
+  "rewrites": {
+    "beforeFiles": [],
+    "afterFiles": [],
+    "fallback": []
+  },
+  "dynamicRoutes": [
+    {
+      "page": "/admin/academics/bos/[bosId]",
+      "regex": "^/admin/academics/bos/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPbosId": "nxtPbosId"
+      },
+      "namedRegex": "^/admin/academics/bos/(?<nxtPbosId>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/clubs/[id]",
+      "regex": "^/clubs/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/clubs/(?<nxtPid>[^/]+?)(?:/)?$"
+    },
+    {
+      "page": "/events/[id]",
+      "regex": "^/events/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/events/(?<nxtPid>[^/]+?)(?:/)?$"
+    }
+  ],
+  "staticRoutes": [
+    {
+      "page": "/",
+      "regex": "^/(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/(?:/)?$"
+    },
+    {
+      "page": "/_global-error",
+      "regex": "^/_global\\-error(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_global\\-error(?:/)?$"
+    },
+    {
+      "page": "/_not-found",
+      "regex": "^/_not\\-found(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/admin",
+      "regex": "^/admin(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin(?:/)?$"
+    },
+    {
+      "page": "/admin/academics/bos",
+      "regex": "^/admin/academics/bos(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/academics/bos(?:/)?$"
+    },
+    {
+      "page": "/admin/academics/faculties",
+      "regex": "^/admin/academics/faculties(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/academics/faculties(?:/)?$"
+    },
+    {
+      "page": "/admin/academics/problems",
+      "regex": "^/admin/academics/problems(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/academics/problems(?:/)?$"
+    },
+    {
+      "page": "/admin/academics/timetable",
+      "regex": "^/admin/academics/timetable(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/academics/timetable(?:/)?$"
+    },
+    {
+      "page": "/admin/attendance",
+      "regex": "^/admin/attendance(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/attendance(?:/)?$"
+    },
+    {
+      "page": "/admin/cms",
+      "regex": "^/admin/cms(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/cms(?:/)?$"
+    },
+    {
+      "page": "/admin/cms/clubs",
+      "regex": "^/admin/cms/clubs(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/cms/clubs(?:/)?$"
+    },
+    {
+      "page": "/admin/cms/events",
+      "regex": "^/admin/cms/events(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/cms/events(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/amcat",
+      "regex": "^/admin/coding/amcat(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/amcat(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/amcat-comparison",
+      "regex": "^/admin/coding/amcat\\-comparison(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/amcat\\-comparison(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/platforms",
+      "regex": "^/admin/coding/platforms(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/platforms(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/practice",
+      "regex": "^/admin/coding/practice(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/practice(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/projects",
+      "regex": "^/admin/coding/projects(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/projects(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/students",
+      "regex": "^/admin/coding/students(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/students(?:/)?$"
+    },
+    {
+      "page": "/admin/coding/weekly-report",
+      "regex": "^/admin/coding/weekly\\-report(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/coding/weekly\\-report(?:/)?$"
+    },
+    {
+      "page": "/admin/fees",
+      "regex": "^/admin/fees(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/fees(?:/)?$"
+    },
+    {
+      "page": "/admin/login",
+      "regex": "^/admin/login(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/login(?:/)?$"
+    },
+    {
+      "page": "/admin/settings",
+      "regex": "^/admin/settings(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/settings(?:/)?$"
+    },
+    {
+      "page": "/admin/users",
+      "regex": "^/admin/users(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/admin/users(?:/)?$"
+    },
+    {
+      "page": "/api/extract-bos",
+      "regex": "^/api/extract\\-bos(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/extract\\-bos(?:/)?$"
+    },
+    {
+      "page": "/api/manage-admin",
+      "regex": "^/api/manage\\-admin(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/manage\\-admin(?:/)?$"
+    },
+    {
+      "page": "/api/refresh-profiles",
+      "regex": "^/api/refresh\\-profiles(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/refresh\\-profiles(?:/)?$"
+    },
+    {
+      "page": "/api/send-otp",
+      "regex": "^/api/send\\-otp(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/send\\-otp(?:/)?$"
+    },
+    {
+      "page": "/api/sync-gsheet",
+      "regex": "^/api/sync\\-gsheet(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/sync\\-gsheet(?:/)?$"
+    },
+    {
+      "page": "/api/upload",
+      "regex": "^/api/upload(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/upload(?:/)?$"
+    },
+    {
+      "page": "/api/verify-otp",
+      "regex": "^/api/verify\\-otp(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/verify\\-otp(?:/)?$"
+    },
+    {
+      "page": "/clubs",
+      "regex": "^/clubs(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/clubs(?:/)?$"
+    },
+    {
+      "page": "/events",
+      "regex": "^/events(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/events(?:/)?$"
+    }
+  ],
+  "dataRoutes": [],
+  "rsc": {
+    "header": "rsc",
+    "varyHeader": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "prefetchHeader": "next-router-prefetch",
+    "didPostponeHeader": "x-nextjs-postponed",
+    "contentTypeHeader": "text/x-component",
+    "suffix": ".rsc",
+    "prefetchSegmentHeader": "next-router-segment-prefetch",
+    "prefetchSegmentSuffix": ".segment.rsc",
+    "prefetchSegmentDirSuffix": ".segments",
+    "clientParamParsing": false,
+    "dynamicRSCPrerender": false
+  },
+  "rewriteHeaders": {
+    "pathHeader": "x-nextjs-rewritten-path",
+    "queryHeader": "x-nextjs-rewritten-query"
+  }
+}
