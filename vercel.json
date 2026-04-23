@@ -1,5 +1,24 @@
 {
-  "rewrites": [
-    { "source": "/((?!api/|assets/).*)", "destination": "/index.html" }
+  "crons": [
+    {
+      "path": "/api/sync-gsheet",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/sync-gsheet",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/refresh-profiles?platform=leetcode",
+      "schedule": "30 18 * * *"
+    },
+    {
+      "path": "/api/refresh-profiles?platform=codeforces",
+      "schedule": "30 19 * * *"
+    },
+    {
+      "path": "/api/refresh-profiles?platform=github",
+      "schedule": "0 20 * * *"
+    }
   ]
 }

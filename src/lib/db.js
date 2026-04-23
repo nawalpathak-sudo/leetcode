@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { supabase, amcatSupabase } from './supabase'
 import { calculateLeetCodeScore, calculateCodeforcesScore } from './scoring'
 
 // ---- Platforms ----
@@ -975,4 +975,58 @@ export async function loadSolvedMap() {
     }
   }
   return map
+}
+
+// ---- AMCAT Assessment Data ----
+
+export async function getAmcatResultsByLeadId(leadId) {
+  if (!amcatSupabase) return { amcat: [], svar: [] }
+  const [amcatRes, svarRes] = await Promise.all([
+    amcatSupabase.from('amcat_results').select('*, assessments(assessment_name, test_date)').eq('tag3', leadId),
+    amcatSupabase.from('svar_results').select('*, assessments(assessment_name, test_date)').eq('tag3', leadId),
+  ])
+  return {
+    amcat: amcatRes.data || [],
+    svar: svarRes.data || [],
+  }
+}
+
+export async function getAmcatResultsByEmail(email) {
+  if (!amcatSupabase || !email) return { amcat: [], svar: [] }
+  const [amcatRes, svarRes] = await Promise.all([
+    amcatSupabase.from('amcat_results').select('*, assessments(assessment_name, test_date)').eq('email', email),
+    amcatSupabase.from('svar_results').select('*, assessments(assessment_name, test_date)').eq('email', email),
+  ])
+  return {
+    amcat: amcatRes.data || [],
+    svar: svarRes.data || [],
+  }
+}
+
+export async function getAllAmcatResults() {
+  if (!amcatSupabase) return []
+  const { data, error } = await amcatSupabase
+    .from('amcat_results')
+    .select('*, assessments(assessment_name, test_date, campuses(campus_name), batches(batch_name))')
+  if (error) { console.error('Load AMCAT results error:', error); return [] }
+  return data || []
+}
+
+export async function getAllSvarResults() {
+  if (!amcatSupabase) return []
+  const { data, error } = await amcatSupabase
+    .from('svar_results')
+    .select('*, assessments(assessment_name, test_date, campuses(campus_name), batches(batch_name))')
+  if (error) { console.error('Load SVAR results error:', error); return [] }
+  return data || []
+}
+
+export async function getAmcatAssessments() {
+  if (!amcatSupabase) return []
+  const { data, error } = await amcatSupabase
+    .from('assessments')
+    .select('*, campuses(campus_name), batches(batch_name), exam_categories(category_name)')
+    .order('test_date', { ascending: false })
+  if (error) { console.error('Load assessments error:', error); return [] }
+  return data || []
 }

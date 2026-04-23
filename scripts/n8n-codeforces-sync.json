@@ -1,0 +1,214 @@
+{
+  "name": "Codeforces Profile Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Daily Midnight",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://ifkkhwumimawacqaujop.supabase.co/rest/v1/coding_profiles",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "lead_id,username" },
+            { "name": "platform", "value": "eq.codeforces" },
+            { "name": "username", "value": "not.is.null" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4OTE3NTksImV4cCI6MjA4NjQ2Nzc1OX0.rmPKoWFi1iJLHyb1ozHgqI75t51alDwTqZZGcnBZu1I" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4OTE3NTksImV4cCI6MjA4NjQ2Nzc1OX0.rmPKoWFi1iJLHyb1ozHgqI75t51alDwTqZZGcnBZu1I" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "fetch_profiles",
+      "name": "Get All CF Profiles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "id": "split_batches",
+      "name": "Loop Over Profiles",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://codeforces.com/api/user.info?handles={{ $json.username }}",
+        "options": {
+          "response": { "response": { "responseFormat": "json" } },
+          "timeout": 15000
+        }
+      },
+      "id": "cf_user_info",
+      "name": "CF User Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://codeforces.com/api/user.status?handle={{ $('Loop Over Profiles').item.json.username }}&from=1&count=500",
+        "options": {
+          "response": { "response": { "responseFormat": "json" } },
+          "timeout": 30000
+        }
+      },
+      "id": "cf_submissions",
+      "name": "CF Submissions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://codeforces.com/api/user.rating?handle={{ $('Loop Over Profiles').item.json.username }}",
+        "options": {
+          "response": { "response": { "responseFormat": "json" } },
+          "timeout": 15000
+        }
+      },
+      "id": "cf_rating",
+      "name": "CF Rating History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const profile = $('Loop Over Profiles').item.json;\nconst userInfo = $('CF User Info').item.json;\nconst subs = $('CF Submissions').item.json;\nconst rating = $('CF Rating History').item.json;\n\nconst user = (userInfo.status === 'OK' && userInfo.result?.[0]) ? userInfo.result[0] : { handle: profile.username };\nconst submissions = (subs.status === 'OK') ? subs.result || [] : [];\nconst ratingHistory = (rating.status === 'OK') ? rating.result || [] : [];\n\nreturn {\n  json: {\n    lead_id: profile.lead_id,\n    platform: 'codeforces',\n    username: profile.username,\n    fetched_at: new Date().toISOString(),\n    raw_json: {\n      user: {\n        handle: user.handle,\n        rating: user.rating || null,\n        maxRating: user.maxRating || null,\n        rank: user.rank || null,\n        maxRank: user.maxRank || null,\n        avatar: user.avatar || null,\n        titlePhoto: user.titlePhoto || null,\n        contribution: user.contribution || 0,\n        friendOfCount: user.friendOfCount || 0,\n        lastOnlineTimeSeconds: user.lastOnlineTimeSeconds || null,\n        registrationTimeSeconds: user.registrationTimeSeconds || null\n      },\n      submissions: submissions,\n      ratingHistory: ratingHistory\n    }\n  }\n};"
+      },
+      "id": "build_payload",
+      "name": "Build JSON Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "https://ifkkhwumimawacqaujop.supabase.co/rest/v1/coding_profiles",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "lead_id", "value": "=eq.{{ $json.lead_id }}" },
+            { "name": "platform", "value": "eq.codeforces" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDg5MTc1OSwiZXhwIjoyMDg2NDY3NzU5fQ.BB3cqEO73Oot2ovkPRZ8l3eTxnq7ltJB1PtMmbh98RQ" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDg5MTc1OSwiZXhwIjoyMDg2NDY3NzU5fQ.BB3cqEO73Oot2ovkPRZ8l3eTxnq7ltJB1PtMmbh98RQ" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ raw_json: $json.raw_json, fetched_at: $json.fetched_at }) }}"
+      },
+      "id": "upsert_supabase",
+      "name": "Update Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "code": "// 2 second delay to respect CF rate limit (1 req/2sec)\nawait new Promise(r => setTimeout(r, 2000));\nreturn $input.all();"
+      },
+      "id": "rate_limit",
+      "name": "Rate Limit Wait",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 0]
+    }
+  ],
+  "connections": {
+    "Daily Midnight": {
+      "main": [
+        [{ "node": "Get All CF Profiles", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get All CF Profiles": {
+      "main": [
+        [{ "node": "Loop Over Profiles", "type": "main", "index": 0 }]
+      ]
+    },
+    "Loop Over Profiles": {
+      "main": [
+        [{ "node": "CF User Info", "type": "main", "index": 0 }]
+      ]
+    },
+    "CF User Info": {
+      "main": [
+        [{ "node": "CF Submissions", "type": "main", "index": 0 }]
+      ]
+    },
+    "CF Submissions": {
+      "main": [
+        [{ "node": "CF Rating History", "type": "main", "index": 0 }]
+      ]
+    },
+    "CF Rating History": {
+      "main": [
+        [{ "node": "Build JSON Payload", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build JSON Payload": {
+      "main": [
+        [{ "node": "Update Supabase", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Supabase": {
+      "main": [
+        [{ "node": "Rate Limit Wait", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rate Limit Wait": {
+      "main": [
+        [{ "node": "Loop Over Profiles", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

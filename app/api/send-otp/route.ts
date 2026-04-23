@@ -1,56 +1,40 @@
-import { createClient } from '@supabase/supabase-js'
+import { NextRequest, NextResponse } from 'next/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
-const MAX_OTP_PER_PHONE = 3    // max 3 OTPs per phone per window
-const MAX_OTP_PER_IP = 10      // max 10 OTPs per IP per window
-const RATE_WINDOW_MINUTES = 10 // rate limit window
-const COOLDOWN_SECONDS = 30    // min gap between OTPs for same phone
+const MAX_OTP_PER_PHONE = 3
+const MAX_OTP_PER_IP = 10
+const RATE_WINDOW_MINUTES = 10
+const COOLDOWN_SECONDS = 30
 
-function getClientIp(req) {
+function getClientIp(req: NextRequest) {
   return (
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.headers['x-real-ip'] ||
-    req.socket?.remoteAddress ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') ||
     'unknown'
   )
 }
 
-function isValidPhone(phone) {
+function isValidPhone(phone: string) {
   return /^91\d{10}$/.test(phone)
 }
 
-export default async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-    return res.status(200).end()
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' })
-  }
-
-  const { phone } = req.body || {}
+export async function POST(req: NextRequest) {
+  const { phone } = await req.json()
 
   if (!phone) {
-    return res.status(400).json({ error: 'phone is required' })
+    return NextResponse.json({ error: 'phone is required' }, { status: 400 })
   }
 
   if (!isValidPhone(phone)) {
-    return res.status(400).json({ error: 'Invalid phone format. Expected 91 followed by 10 digits.' })
+    return NextResponse.json({ error: 'Invalid phone format. Expected 91 followed by 10 digits.' }, { status: 400 })
   }
 
   const clientIp = getClientIp(req)
 
   try {
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
-    )
-
+    const supabase = createAdminClient()
     const windowStart = new Date(Date.now() - RATE_WINDOW_MINUTES * 60 * 1000).toISOString()
 
-    // Run all 3 rate limit checks in parallel
     const [phoneResult, ipResult, cooldownResult] = await Promise.all([
       supabase
         .from('otp_rate_limits')
@@ -69,33 +53,25 @@ export default async function handler(req, res) {
         .single(),
     ])
 
-    if (phoneResult.count >= MAX_OTP_PER_PHONE) {
-      return res.status(429).json({
-        error: `Too many OTP requests. Try again after ${RATE_WINDOW_MINUTES} minutes.`,
-      })
+    if ((phoneResult.count ?? 0) >= MAX_OTP_PER_PHONE) {
+      return NextResponse.json({ error: `Too many OTP requests. Try again after ${RATE_WINDOW_MINUTES} minutes.` }, { status: 429 })
     }
 
-    if (ipResult.count >= MAX_OTP_PER_IP) {
-      return res.status(429).json({
-        error: 'Too many OTP requests from this network. Try again later.',
-      })
+    if ((ipResult.count ?? 0) >= MAX_OTP_PER_IP) {
+      return NextResponse.json({ error: 'Too many OTP requests from this network. Try again later.' }, { status: 429 })
     }
 
     if (cooldownResult.data) {
       const elapsed = (Date.now() - new Date(cooldownResult.data.created_at).getTime()) / 1000
       if (elapsed < COOLDOWN_SECONDS) {
         const wait = Math.ceil(COOLDOWN_SECONDS - elapsed)
-        return res.status(429).json({
-          error: `Please wait ${wait} seconds before requesting another OTP.`,
-        })
+        return NextResponse.json({ error: `Please wait ${wait} seconds before requesting another OTP.` }, { status: 429 })
       }
     }
 
-    // All checks passed — generate and send OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000))
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 
-    // Save OTP and log rate limit in parallel
     const [{ error: dbError }] = await Promise.all([
       supabase
         .from('otp_codes')
@@ -133,9 +109,9 @@ export default async function handler(req, res) {
       throw new Error(`TrustSignal error: ${JSON.stringify(result)}`)
     }
 
-    return res.status(200).json({ success: true, message: 'OTP sent' })
-  } catch (err) {
+    return NextResponse.json({ success: true, message: 'OTP sent' })
+  } catch (err: any) {
     console.error('send-otp error:', err)
-    return res.status(500).json({ error: err.message })
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }

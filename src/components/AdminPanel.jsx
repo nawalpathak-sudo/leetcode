@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { Upload, Trash2, UserMinus, RefreshCw, Users, Link2, Mail } from 'lucide-react'
+import { Upload, Trash2, UserMinus, RefreshCw, Users, Link2, Mail, ClipboardList, ExternalLink, ChevronDown, ChevronUp, Search } from 'lucide-react'
 import { fetchLeetCodeData, fetchCodeforcesData, fetchGitHubData, sanitizeUsername } from '../lib/api'
 import {
   loadAllProfiles, saveProfile, deleteProfile, clearAllProfiles,
   upsertStudents, loadAllStudents, linkProfile, loadAllCodingProfilesMap,
   bulkUpdateEmails, updateStudentField,
+  getAllAmcatResults, getAllSvarResults, getAmcatAssessments,
 } from '../lib/db'
 import Papa from 'papaparse'
 
@@ -45,9 +46,10 @@ export default function AdminPanel({ platforms, adminUser }) {
           <TabButton active={tab === 'students'} onClick={() => setTab('students')} icon={<Users size={16} />} label="Students" />
           <TabButton active={tab === 'link'} onClick={() => setTab('link')} icon={<Link2 size={16} />} label="Link Profiles" />
           <TabButton active={tab === 'manage'} onClick={() => setTab('manage')} icon={<RefreshCw size={16} />} label="Manage Data" />
+          <TabButton active={tab === 'amcat'} onClick={() => setTab('amcat')} icon={<ClipboardList size={16} />} label="AMCAT" />
           {isMaster && <TabButton active={tab === 'emails'} onClick={() => setTab('emails')} icon={<Mail size={16} />} label="Update Emails" />}
         </div>
-        {tab !== 'students' && tab !== 'emails' && (
+        {tab !== 'students' && tab !== 'emails' && tab !== 'amcat' && (
           <select
             value={platform}
             onChange={e => setPlatform(e.target.value)}
@@ -69,6 +71,7 @@ export default function AdminPanel({ platforms, adminUser }) {
           <ProfileManager profiles={profiles} platform={platform} platformName={platformName} onUpdate={reload} adminUser={adminUser} />
         )
       )}
+      {tab === 'amcat' && <AmcatAssessments adminUser={adminUser} />}
       {tab === 'emails' && isMaster && <EmailUploader />}
     </div>
   )
@@ -1199,4 +1202,573 @@ function SortTh({ label, field, sortKey, sortDir, onSort, align = 'left' }) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ---- AMCAT Assessments ----
+
+const AMCAT_MODULES = {
+  aptitude: [
+    { name: 'Quantitative Ability', main: 'quantitative_score', subs: [
+      { label: 'Number Theory', key: 'quant_number_theory' },
+      { label: 'Basic Numbers', key: 'quant_basic_numbers' },
+      { label: 'Applied Math', key: 'quant_applied_math' },
+    ]},
+    { name: 'English Comprehension', main: 'english_score', subs: [
+      { label: 'Vocabulary', key: 'english_vocabulary' },
+      { label: 'Grammar', key: 'english_grammar' },
+      { label: 'Comprehension', key: 'english_comprehension' },
+    ]},
+    { name: 'Logical Ability', main: 'logical_score', subs: [
+      { label: 'Inductive', key: 'logical_inductive' },
+      { label: 'Deductive', key: 'logical_deductive' },
+    ]},
+  ],
+  automata: [
+    { name: 'Automata', main: 'automata_score', subs: [
+      { label: 'Prog. Ability', key: 'automata_programming_ability' },
+      { label: 'Prog. Practices', key: 'automata_programming_practices' },
+      { label: 'Correctness', key: 'automata_functional_correctness' },
+      { label: 'Runtime Complexity', key: 'automata_runtime_complexity' },
+    ]},
+  ],
+  ds: [
+    { name: 'Data Structures', main: 'ds_score', subs: [
+      { label: 'Basics & Linked Lists', key: 'ds_basics_linked_lists' },
+      { label: 'Sorting & Searching', key: 'ds_sorting_searching' },
+      { label: 'Stacks & Queues', key: 'ds_stacks_queues' },
+      { label: 'Trees & Graphs', key: 'ds_trees_graphs' },
+    ]},
+  ],
+  svar: [
+    { name: 'SVAR Spoken English', main: 'svar_spoken_english_score', subs: [
+      { label: 'Understanding', key: 'svar_understanding' },
+      { label: 'Vocabulary', key: 'svar_vocabulary' },
+      { label: 'Articulation', key: 'svar_articulation' },
+      { label: 'Grammar', key: 'svar_grammar' },
+      { label: 'Pronunciation', key: 'svar_pronunciation' },
+      { label: 'Fluency', key: 'svar_fluency' },
+      { label: 'Active Listening', key: 'svar_active_listening' },
+    ]},
+  ],
+}
+
+function getActiveModules(group) {
+  if (group === 'all') return [...AMCAT_MODULES.aptitude, ...AMCAT_MODULES.automata, ...AMCAT_MODULES.ds, ...AMCAT_MODULES.svar]
+  return AMCAT_MODULES[group] || []
+}
+
+function fmtScore(v) {
+  if (v === null || v === undefined) return '—'
+  return Number(v).toFixed(1)
+}
+
+function avgScore(data, field) {
+  const vals = data.map(d => d[field]).filter(v => v != null)
+  if (!vals.length) return null
+  return vals.reduce((a, b) => a + Number(b), 0) / vals.length
+}
+
+function minScore(data, field) {
+  const vals = data.map(d => d[field]).filter(v => v != null).map(Number)
+  return vals.length ? Math.min(...vals) : null
+}
+
+function maxScore(data, field) {
+  const vals = data.map(d => d[field]).filter(v => v != null).map(Number)
+  return vals.length ? Math.max(...vals) : null
+}
+
+export function AmcatAssessments({ adminUser }) {
+  const isFaculty = adminUser?.role === 'faculty'
+  const facultyCampus = adminUser?.campus
+  const [allAmcat, setAllAmcat] = useState([])
+  const [allSvar, setAllSvar] = useState([])
+  const [assessments, setAssessments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+
+  // Filters
+  const [campusFilter, setCampusFilter] = useState(isFaculty && facultyCampus ? facultyCampus : '')
+  const [batchFilter, setBatchFilter] = useState('')
+  const [assessmentFilter, setAssessmentFilter] = useState('')
+  const [moduleGroup, setModuleGroup] = useState('all')
+
+  // Report state
+  const [reportData, setReportData] = useState(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [rankModule, setRankModule] = useState('')
+  const [rankType, setRankType] = useState('top')
+  const [distModule, setDistModule] = useState('')
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      const [amcat, svar, assess] = await Promise.all([
+        getAllAmcatResults(), getAllSvarResults(), getAmcatAssessments()
+      ])
+      setAllAmcat(amcat)
+      setAllSvar(svar)
+      setAssessments(assess)
+      setLoading(false)
+    })()
+  }, [])
+
+  const campuses = [...new Set(assessments.map(a => a.campuses?.campus_name).filter(Boolean))].sort()
+  const filteredAssessments = assessments.filter(a => {
+    if (campusFilter && a.campuses?.campus_name !== campusFilter) return false
+    if (batchFilter && a.batches?.batch_name !== batchFilter) return false
+    return true
+  })
+  const batches = [...new Set(
+    assessments.filter(a => !campusFilter || a.campuses?.campus_name === campusFilter)
+      .map(a => a.batches?.batch_name).filter(Boolean)
+  )].sort()
+
+  // Top-level stats
+  const totalStudents = new Set(allAmcat.map(r => r.tag3 || r.email).filter(Boolean)).size
+  const totalResults = allAmcat.length
+  const totalSvar = allSvar.length
+
+  const generateReport = () => {
+    setGenerating(true)
+    let data = [...allAmcat]
+    if (campusFilter) data = data.filter(d => d.assessments?.campuses?.campus_name === campusFilter)
+    if (batchFilter) data = data.filter(d => d.assessments?.batches?.batch_name === batchFilter)
+    if (assessmentFilter) data = data.filter(d => String(d.assessment_id) === assessmentFilter)
+
+    // Merge SVAR data
+    let svar = [...allSvar]
+    if (campusFilter) svar = svar.filter(d => d.assessments?.campuses?.campus_name === campusFilter)
+    if (batchFilter) svar = svar.filter(d => d.assessments?.batches?.batch_name === batchFilter)
+
+    const svarLookup = {}
+    svar.forEach(r => {
+      const key = r.tag3 || r.email || r.email_invited
+      if (key) svarLookup[key] = r
+    })
+
+    const amcatKeys = new Set()
+    data.forEach(r => {
+      const key = r.tag3 || r.email || r.email_invited
+      if (key) {
+        amcatKeys.add(key)
+        const sv = svarLookup[key]
+        if (sv) {
+          r.svar_spoken_english_score = sv.svar_spoken_english_score
+          r.svar_spoken_english_cefr_level = sv.svar_spoken_english_cefr_level
+          r.svar_understanding = sv.svar_understanding
+          r.svar_vocabulary = sv.svar_vocabulary
+          r.svar_articulation = sv.svar_articulation
+          r.svar_grammar = sv.svar_grammar
+          r.svar_pronunciation = sv.svar_pronunciation
+          r.svar_fluency = sv.svar_fluency
+          r.svar_active_listening = sv.svar_active_listening
+          if (sv.report_url) r.svar_report_url = sv.report_url
+        }
+      }
+    })
+
+    // Add SVAR-only records
+    svar.forEach(r => {
+      const key = r.tag3 || r.email || r.email_invited
+      if (key && !amcatKeys.has(key)) {
+        data.push({
+          tag3: r.tag3, email: r.email, email_invited: r.email_invited,
+          full_name: r.full_name, name_invited: r.name_invited,
+          participant_status: r.participant_status, assessments: r.assessments,
+          svar_spoken_english_score: r.svar_spoken_english_score,
+          svar_spoken_english_cefr_level: r.svar_spoken_english_cefr_level,
+          svar_understanding: r.svar_understanding, svar_vocabulary: r.svar_vocabulary,
+          svar_articulation: r.svar_articulation, svar_grammar: r.svar_grammar,
+          svar_pronunciation: r.svar_pronunciation, svar_fluency: r.svar_fluency,
+          svar_active_listening: r.svar_active_listening, report_url: r.report_url,
+        })
+      }
+    })
+
+    const modules = getActiveModules(moduleGroup)
+    if (modules.length > 0) {
+      setRankModule(modules[0].main)
+      setDistModule(modules[0].main)
+    }
+    setReportData(data)
+    setGenerating(false)
+  }
+
+  const exportCSV = () => {
+    if (!reportData?.length) return
+    const modules = getActiveModules(moduleGroup)
+    const headers = ['Lead ID', 'Name', 'Email', 'Status']
+    const fields = ['tag3', 'full_name', 'email', 'participant_status']
+    modules.forEach(m => {
+      headers.push(m.name)
+      fields.push(m.main)
+      m.subs.forEach(s => { headers.push(s.label); fields.push(s.key) })
+    })
+    headers.push('Report URL')
+    fields.push('report_url')
+
+    let csv = headers.map(h => `"${h}"`).join(',') + '\n'
+    reportData.forEach(d => {
+      csv += fields.map(f => {
+        const v = d[f]
+        if (v == null) return ''
+        return `"${String(v).replace(/"/g, '""')}"`
+      }).join(',') + '\n'
+    })
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `amcat_report_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (loading) return <Spinner />
+
+  const modules = getActiveModules(moduleGroup)
+
+  return (
+    <div className="space-y-6">
+      {/* Top Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          { label: 'TOTAL STUDENTS', value: totalStudents },
+          { label: 'AMCAT RESULTS', value: totalResults },
+          { label: 'SVAR RESULTS', value: totalSvar },
+          { label: 'ASSESSMENTS', value: assessments.length },
+        ].map(s => (
+          <div key={s.label} className="bg-white rounded-xl border border-primary/10 shadow-sm p-6 text-center">
+            <div className="text-3xl font-bold text-primary">{s.value}</div>
+            <div className="text-xs text-primary/50 mt-1 tracking-wider">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter Card */}
+      <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm space-y-4">
+        <div>
+          <h3 className="font-semibold text-lg text-primary">View AMCAT Assessment</h3>
+          <p className="text-sm text-primary/50 mt-1">Filter AMCAT results by campus, batch, or assessment to view performance and individual reports.</p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">Campus</label>
+            <select value={campusFilter} onChange={e => { setCampusFilter(e.target.value); setBatchFilter(''); setAssessmentFilter('') }}
+              className="w-full bg-white border border-primary/20 rounded-lg px-3 py-2.5 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient">
+              <option value="">All Campuses</option>
+              {campuses.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">Batch</label>
+            <select value={batchFilter} onChange={e => { setBatchFilter(e.target.value); setAssessmentFilter('') }}
+              className="w-full bg-white border border-primary/20 rounded-lg px-3 py-2.5 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient">
+              <option value="">All Batches</option>
+              {batches.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">Assessment</label>
+            <select value={assessmentFilter} onChange={e => setAssessmentFilter(e.target.value)}
+              className="w-full bg-white border border-primary/20 rounded-lg px-3 py-2.5 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient">
+              <option value="">All Assessments</option>
+              {filteredAssessments.map(a => <option key={a.id} value={a.id}>{a.assessment_name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-primary mb-1">Module Group</label>
+          <select value={moduleGroup} onChange={e => setModuleGroup(e.target.value)}
+            className="w-full bg-white border border-primary/20 rounded-lg px-3 py-2.5 text-sm text-primary focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient">
+            <option value="all">All Modules</option>
+            <option value="aptitude">Aptitude (Quantitative + English + Logical)</option>
+            <option value="automata">Automata (Coding)</option>
+            <option value="ds">Data Structures</option>
+            <option value="svar">SVAR (Spoken English)</option>
+          </select>
+        </div>
+
+        <button onClick={generateReport} disabled={generating}
+          className="px-6 py-2.5 bg-primary text-white rounded-lg font-medium text-sm hover:bg-primary/90 transition-colors disabled:opacity-50">
+          {generating ? 'Generating...' : 'Generate Report'}
+        </button>
+      </div>
+
+      {/* Report Results */}
+      {reportData && (
+        <>
+          {/* Summary Stats */}
+          <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
+            <div className="flex flex-wrap gap-3 justify-center">
+              <div className="bg-primary/5 rounded-xl px-5 py-3 text-center min-w-[120px]">
+                <div className="text-2xl font-bold text-primary">{reportData.length}</div>
+                <div className="text-xs text-primary/50">Total</div>
+              </div>
+              {modules.map(m => {
+                const avg = avgScore(reportData, m.main)
+                return (
+                  <div key={m.main} className="bg-primary/5 rounded-xl px-5 py-3 text-center min-w-[120px]">
+                    <div className="text-2xl font-bold text-primary">{fmtScore(avg)}</div>
+                    <div className="text-xs text-primary/50">Avg {m.name}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Module Breakdown */}
+          <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
+            <h3 className="font-semibold text-lg text-primary mb-4">Module Breakdown</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-primary/5">
+                  <tr>
+                    <th className="py-2.5 px-3 text-left font-medium text-primary/70">Module / Subsection</th>
+                    <th className="py-2.5 px-3 text-right font-medium text-primary/70">Avg</th>
+                    <th className="py-2.5 px-3 text-right font-medium text-primary/70">Min</th>
+                    <th className="py-2.5 px-3 text-right font-medium text-primary/70">Max</th>
+                    <th className="py-2.5 px-3 text-right font-medium text-primary/70">Count</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-primary/5">
+                  {modules.map(m => (
+                    <>
+                      <tr key={m.main} className="bg-ambient/5 font-semibold">
+                        <td className="py-2.5 px-3 text-primary">{m.name}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-primary">{fmtScore(avgScore(reportData, m.main))}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-primary/60">{fmtScore(minScore(reportData, m.main))}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-primary/60">{fmtScore(maxScore(reportData, m.main))}</td>
+                        <td className="py-2.5 px-3 text-right text-primary/60">{reportData.filter(d => d[m.main] != null).length}</td>
+                      </tr>
+                      {m.subs.map(s => (
+                        <tr key={s.key}>
+                          <td className="py-2 px-3 pl-8 text-primary/70">{s.label}</td>
+                          <td className="py-2 px-3 text-right font-mono text-primary/70">{fmtScore(avgScore(reportData, s.key))}</td>
+                          <td className="py-2 px-3 text-right font-mono text-primary/40">{fmtScore(minScore(reportData, s.key))}</td>
+                          <td className="py-2 px-3 text-right font-mono text-primary/40">{fmtScore(maxScore(reportData, s.key))}</td>
+                          <td className="py-2 px-3 text-right text-primary/40">{reportData.filter(d => d[s.key] != null).length}</td>
+                        </tr>
+                      ))}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Score Distribution */}
+          {modules.length > 0 && (
+            <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
+              <h3 className="font-semibold text-lg text-primary mb-4">Score Distribution</h3>
+              <select value={distModule} onChange={e => setDistModule(e.target.value)}
+                className="mb-4 bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary focus:outline-none focus:border-ambient">
+                {modules.map(m => <option key={m.main} value={m.main}>{m.name}</option>)}
+              </select>
+              <ScoreDistribution data={reportData} field={distModule} />
+            </div>
+          )}
+
+          {/* Rankings */}
+          {modules.length > 0 && (
+            <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
+              <h3 className="font-semibold text-lg text-primary mb-4">Rankings</h3>
+              <div className="flex gap-3 mb-4">
+                <select value={rankModule} onChange={e => setRankModule(e.target.value)}
+                  className="bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary focus:outline-none focus:border-ambient">
+                  {modules.map(m => <option key={m.main} value={m.main}>{m.name}</option>)}
+                </select>
+                <select value={rankType} onChange={e => setRankType(e.target.value)}
+                  className="bg-white border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary focus:outline-none focus:border-ambient">
+                  <option value="top">Top 10</option>
+                  <option value="bottom">Bottom 10</option>
+                </select>
+              </div>
+              <RankingsTable data={reportData} field={rankModule} type={rankType} />
+            </div>
+          )}
+
+          {/* Individual Results */}
+          <div className="bg-white rounded-xl p-6 border border-primary/10 shadow-sm">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <h3 className="font-semibold text-lg text-primary">Individual Results</h3>
+              <div className="flex gap-2">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-primary/40" />
+                  <input type="text" placeholder="Search by name or lead ID..."
+                    value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                    className="pl-9 pr-3 py-2 bg-white border border-primary/20 rounded-lg text-sm focus:outline-none focus:border-ambient focus:ring-1 focus:ring-ambient w-56" />
+                </div>
+                <button onClick={exportCSV}
+                  className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+                  Export CSV
+                </button>
+              </div>
+            </div>
+            <IndividualResultsTable data={reportData} modules={modules} moduleGroup={moduleGroup} searchQuery={searchQuery} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ScoreDistribution({ data, field }) {
+  const vals = data.map(d => d[field]).filter(v => v != null).map(Number)
+  if (!vals.length) return <p className="text-primary/40 text-sm">No data available for this module.</p>
+
+  const maxVal = Math.max(...vals)
+  const bucketSize = maxVal <= 100 ? 20 : maxVal <= 500 ? 100 : 200
+  const bucketLabels = []
+  const buckets = {}
+  for (let i = 0; i <= maxVal; i += bucketSize) {
+    const label = `${i}-${i + bucketSize}`
+    bucketLabels.push(label)
+    buckets[label] = 0
+  }
+  vals.forEach(v => {
+    const idx = Math.min(Math.floor(v / bucketSize), bucketLabels.length - 1)
+    buckets[bucketLabels[idx]]++
+  })
+  const maxCount = Math.max(...Object.values(buckets))
+  const total = vals.length
+  const lowCount = vals.filter(v => v < 35).length
+  const midCount = vals.filter(v => v >= 35 && v <= 60).length
+  const highCount = vals.filter(v => v > 60).length
+
+  return (
+    <div className="flex flex-col lg:flex-row gap-6">
+      <div className="flex-[2] space-y-2">
+        {bucketLabels.map(label => {
+          const count = buckets[label]
+          const widthPct = maxCount > 0 ? (count / maxCount) * 100 : 0
+          const sharePct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0'
+          return (
+            <div key={label} className="flex items-center gap-3">
+              <span className="w-16 text-right text-xs text-primary/60 font-mono">{label}</span>
+              <div className="flex-1 h-6 bg-primary/5 rounded overflow-hidden">
+                <div className="h-full bg-ambient rounded transition-all" style={{ width: `${widthPct}%` }} />
+              </div>
+              <span className="w-20 text-xs font-semibold text-primary">{count} ({sharePct}%)</span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex-1 border-l border-primary/10 pl-4 text-sm text-primary space-y-3">
+        <div className="font-semibold mb-2">Placement Benchmark</div>
+        <div>
+          <div className="font-semibold text-red-600">&lt;35% Score</div>
+          <div className="text-primary/50">Low Likelihood — {total > 0 ? ((lowCount / total) * 100).toFixed(1) : 0}%</div>
+        </div>
+        <div>
+          <div className="font-semibold text-amber-600">35–60% Score</div>
+          <div className="text-primary/50">Average Likelihood — {total > 0 ? ((midCount / total) * 100).toFixed(1) : 0}%</div>
+        </div>
+        <div>
+          <div className="font-semibold text-green-600">&gt;60% Score</div>
+          <div className="text-primary/50">High Likelihood — {total > 0 ? ((highCount / total) * 100).toFixed(1) : 0}%</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RankingsTable({ data, field, type }) {
+  const scored = data
+    .filter(d => d[field] != null)
+    .map(d => ({ name: d.full_name || d.name_invited || '—', lead_id: d.tag3 || '—', score: Number(d[field]), status: d.participant_status || '—' }))
+  scored.sort((a, b) => type === 'top' ? b.score - a.score : a.score - b.score)
+  const top = scored.slice(0, 10)
+
+  if (!top.length) return <p className="text-primary/40 text-sm">No data available.</p>
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-primary/5">
+          <tr>
+            <th className="py-2.5 px-3 text-left font-medium text-primary/70">Rank</th>
+            <th className="py-2.5 px-3 text-left font-medium text-primary/70">Name</th>
+            <th className="py-2.5 px-3 text-left font-medium text-primary/70">Lead ID</th>
+            <th className="py-2.5 px-3 text-right font-medium text-primary/70">Score</th>
+            <th className="py-2.5 px-3 text-left font-medium text-primary/70">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-primary/5">
+          {top.map((s, i) => (
+            <tr key={i}>
+              <td className="py-2.5 px-3 font-semibold text-primary">{i + 1}</td>
+              <td className="py-2.5 px-3 text-primary">{s.name}</td>
+              <td className="py-2.5 px-3 text-primary/40 font-mono text-xs">{s.lead_id}</td>
+              <td className="py-2.5 px-3 text-right font-mono font-semibold text-primary">{fmtScore(s.score)}</td>
+              <td className="py-2.5 px-3 text-primary/60">{s.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function IndividualResultsTable({ data, modules, moduleGroup, searchQuery }) {
+  let filtered = data
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase()
+    filtered = data.filter(d => {
+      const name = (d.full_name || d.name_invited || '').toLowerCase()
+      const leadId = (d.tag3 || '').toLowerCase()
+      const email = (d.email || '').toLowerCase()
+      return name.includes(q) || leadId.includes(q) || email.includes(q)
+    })
+  }
+
+  if (!filtered.length) return <p className="text-primary/40 text-sm py-4">No results found.</p>
+
+  return (
+    <div className="overflow-x-auto border border-primary/10 rounded-lg">
+      <table className="w-full text-sm">
+        <thead className="bg-primary/5 text-primary/70">
+          <tr>
+            <th className="py-2.5 px-3 text-left font-medium">Lead ID</th>
+            <th className="py-2.5 px-3 text-left font-medium">Name</th>
+            <th className="py-2.5 px-3 text-left font-medium">Email</th>
+            <th className="py-2.5 px-3 text-left font-medium">Status</th>
+            {modules.map(m => (
+              <th key={m.main} className="py-2.5 px-3 text-right font-medium">{m.name}</th>
+            ))}
+            {moduleGroup !== 'all' && modules.map(m => m.subs.map(s => (
+              <th key={s.key} className="py-2.5 px-3 text-right font-medium text-primary/50">{s.label}</th>
+            )))}
+            <th className="py-2.5 px-3 text-center font-medium">Report</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-primary/5">
+          {filtered.map((d, i) => (
+            <tr key={i} className="hover:bg-primary/[0.02]">
+              <td className="py-2.5 px-3 font-mono text-xs text-primary/40">{d.tag3 || '—'}</td>
+              <td className="py-2.5 px-3 font-medium text-primary">{d.full_name || d.name_invited || '—'}</td>
+              <td className="py-2.5 px-3 text-primary/60 text-xs">{d.email || d.email_invited || '—'}</td>
+              <td className="py-2.5 px-3 text-primary/60 text-xs">{d.participant_status || '—'}</td>
+              {modules.map(m => (
+                <td key={m.main} className="py-2.5 px-3 text-right font-mono text-primary">{fmtScore(d[m.main])}</td>
+              ))}
+              {moduleGroup !== 'all' && modules.map(m => m.subs.map(s => (
+                <td key={s.key} className="py-2.5 px-3 text-right font-mono text-primary/60">{fmtScore(d[s.key])}</td>
+              )))}
+              <td className="py-2.5 px-3 text-center">
+                {(d.report_url || d.svar_report_url) && (
+                  <a href={d.report_url || d.svar_report_url} target="_blank" rel="noopener noreferrer" className="text-ambient hover:text-dark-ambient">
+                    <ExternalLink size={14} />
+                  </a>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }

@@ -1,19 +1,28 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { Eye, BookOpen, LogOut, Shield, Users, Database, FolderGit2 } from 'lucide-react'
-import { loadPlatforms, getAdminByPhone, getAdminById, sendOtp, verifyOtp } from './lib/db'
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { getAdminByPhone, getAdminById, sendOtp, verifyOtp } from './lib/db'
 import { AuthProvider } from './context/AuthContext'
 
-const AdminPanel = lazy(() => import('./components/AdminPanel'))
-const StudentView = lazy(() => import('./components/StudentView'))
+const AdminLayout = lazy(() => import('./admin/AdminLayout'))
+const Dashboard = lazy(() => import('./admin/pages/Dashboard'))
+const Platforms = lazy(() => import('./admin/pages/coding/Platforms'))
+const CodingStudents = lazy(() => import('./admin/pages/coding/Students'))
+const Practice = lazy(() => import('./admin/pages/coding/Practice'))
+const CodingProjects = lazy(() => import('./admin/pages/coding/Projects'))
+const Amcat = lazy(() => import('./admin/pages/coding/Amcat'))
+const LeetCodeProblems = lazy(() => import('./admin/pages/academics/LeetCodeProblems'))
+const BOSPage = lazy(() => import('./admin/pages/academics/BOS'))
+const Faculties = lazy(() => import('./admin/pages/academics/Faculties'))
+const AttendancePage = lazy(() => import('./admin/pages/attendance/AttendancePage'))
+const FeesPage = lazy(() => import('./admin/pages/fees/FeesPage'))
+const UsersPage = lazy(() => import('./admin/pages/users/UsersPage'))
+const Settings = lazy(() => import('./admin/pages/Settings'))
+
 const HomePage = lazy(() => import('./components/HomePage'))
 const StudentPortal = lazy(() => import('./components/StudentPortal'))
 const PublicProfile = lazy(() => import('./components/PublicProfile'))
-const PracticeAdmin = lazy(() => import('./components/PracticeAdmin'))
 const PracticePage = lazy(() => import('./components/PracticePage'))
 const ProjectHub = lazy(() => import('./components/ProjectHub'))
-const UserManagement = lazy(() => import('./components/UserManagement'))
-const AdminProjects = lazy(() => import('./components/AdminProjects'))
 
 function PageSpinner() {
   return (
@@ -22,12 +31,6 @@ function PageSpinner() {
     </div>
   )
 }
-
-const DEFAULT_PLATFORMS = [
-  { slug: 'leetcode', display_name: 'LeetCode', base_url: 'https://leetcode.com', active: true },
-  { slug: 'codeforces', display_name: 'Codeforces', base_url: 'https://codeforces.com', active: true },
-  { slug: 'github', display_name: 'GitHub', base_url: 'https://github.com', active: true },
-]
 
 function formatAdminPhone(raw) {
   const digits = raw.replace(/\D/g, '')
@@ -217,12 +220,7 @@ const ADMIN_SESSION_TTL = 15 * 24 * 60 * 60 * 1000 // 15 days
 function AdminApp() {
   const [adminUser, setAdminUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
-  const [platforms, setPlatforms] = useState([])
-  const [platform, setPlatform] = useState('')
-  const [section, setSection] = useState('dashboard')
-  const [loading, setLoading] = useState(true)
 
-  // Restore admin session (with 15-day expiry)
   useEffect(() => {
     const saved = localStorage.getItem('alta_admin_session')
     if (saved) {
@@ -252,16 +250,6 @@ function AdminApp() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!adminUser) return
-    loadPlatforms().then(data => {
-      const result = data.length > 0 ? data : DEFAULT_PLATFORMS
-      setPlatforms(result)
-      setPlatform(result[0].slug)
-      setLoading(false)
-    })
-  }, [adminUser])
-
   const handleAdminLogin = (admin) => {
     setAdminUser(admin)
     localStorage.setItem('alta_admin_session', JSON.stringify({
@@ -275,9 +263,6 @@ function AdminApp() {
     localStorage.removeItem('alta_admin_session')
   }
 
-  const current = platforms.find(p => p.slug === platform)
-  const platformName = current?.display_name || platform
-
   if (authLoading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
@@ -290,140 +275,7 @@ function AdminApp() {
     return <AdminLoginScreen onSuccess={handleAdminLogin} />
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-ambient border-r-transparent" />
-      </div>
-    )
-  }
-
-  const sectionTitle = section === 'users'
-    ? 'Manage Admin & Faculty Users'
-    : section === 'practice'
-    ? 'LeetCode Corner — Manage Problems'
-    : section === 'data'
-    ? 'Students & Data'
-    : section === 'projects'
-    ? 'Student Projects'
-    : `${platformName} — Dashboard`
-
-  return (
-    <div className="min-h-screen bg-white flex">
-      <aside className="w-60 bg-primary min-h-screen flex flex-col shrink-0 sticky top-0 h-screen">
-        <div className="px-5 py-5 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <img src="/alta-white-text.png" alt="ALTA" className="h-7" />
-            <span className="text-white/30">|</span>
-            <span className="text-white font-medium text-sm">Admin Panel</span>
-          </div>
-        </div>
-
-        <nav className="flex-1 py-3 overflow-y-auto">
-          {/* Platform Dashboards */}
-          {platforms.map(p => (
-            <button
-              key={p.slug}
-              onClick={() => { setPlatform(p.slug); setSection('dashboard') }}
-              className={`w-full px-5 py-3 flex items-center gap-2.5 text-left transition-colors ${
-                platform === p.slug && section === 'dashboard'
-                  ? 'bg-ambient text-primary font-semibold'
-                  : 'text-white/60 hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <Eye size={16} /> {p.display_name}
-            </button>
-          ))}
-
-          <div className="my-2 mx-5 border-t border-white/10" />
-
-          {/* Students & Data */}
-          <button
-            onClick={() => setSection('data')}
-            className={`w-full px-5 py-3 flex items-center gap-2.5 text-left transition-colors ${
-              section === 'data' ? 'bg-ambient text-primary font-semibold' : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Database size={16} /> Students & Data
-          </button>
-
-          {/* LeetCode Corner */}
-          <button
-            onClick={() => setSection('practice')}
-            className={`w-full px-5 py-3 flex items-center gap-2.5 text-left transition-colors ${
-              section === 'practice' ? 'bg-ambient text-primary font-semibold' : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <BookOpen size={16} /> LeetCode Corner
-          </button>
-
-          {/* Projects */}
-          <button
-            onClick={() => setSection('projects')}
-            className={`w-full px-5 py-3 flex items-center gap-2.5 text-left transition-colors ${
-              section === 'projects' ? 'bg-ambient text-primary font-semibold' : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <FolderGit2 size={16} /> Projects
-          </button>
-
-          {/* Manage Users — master + admin only */}
-          {(adminUser.id === 'master' || adminUser.role === 'admin') && (
-            <>
-              <div className="my-2 mx-5 border-t border-white/10" />
-              <button
-                onClick={() => setSection('users')}
-                className={`w-full px-5 py-3 flex items-center gap-2.5 text-left transition-colors ${
-                  section === 'users' ? 'bg-ambient text-primary font-semibold' : 'text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Users size={16} /> Manage Users
-              </button>
-            </>
-          )}
-        </nav>
-
-        {/* Admin user info + logout */}
-        <div className="px-5 py-4 border-t border-white/10 space-y-2">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-ambient/20 flex items-center justify-center text-xs font-bold text-ambient shrink-0">
-              {(adminUser.name || '?')[0].toUpperCase()}
-            </div>
-            <div className="min-w-0">
-              <div className="text-white text-sm font-medium truncate">{adminUser.name}</div>
-              <div className="text-white/30 text-xs capitalize">{adminUser.role}{adminUser.campus ? ` — ${adminUser.campus}` : ''}</div>
-            </div>
-          </div>
-          <button onClick={handleAdminLogout}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-white/40 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-            <LogOut size={12} /> Logout
-          </button>
-        </div>
-      </aside>
-
-      <main className="flex-1 min-w-0">
-        <header className="bg-white border-b border-primary/10 px-8 py-4 sticky top-0 z-40">
-          <h1 className="text-xl font-bold text-primary">{sectionTitle}</h1>
-        </header>
-
-        <div className="p-8 max-w-7xl">
-          <Suspense fallback={<div className="flex justify-center py-20"><div className="h-8 w-8 animate-spin rounded-full border-4 border-ambient border-r-transparent" /></div>}>
-            {section === 'users' ? (
-              <UserManagement adminUser={adminUser} />
-            ) : section === 'practice' ? (
-              <PracticeAdmin />
-            ) : section === 'data' ? (
-              <AdminPanel platforms={platforms} adminUser={adminUser} />
-            ) : section === 'projects' ? (
-              <AdminProjects adminUser={adminUser} />
-            ) : (
-              <StudentView platform={platform} platformName={platformName} adminUser={adminUser} />
-            )}
-          </Suspense>
-        </div>
-      </main>
-    </div>
-  )
+  return <AdminLayout adminUser={adminUser} onLogout={handleAdminLogout} />
 }
 
 export default function App() {
@@ -433,7 +285,23 @@ export default function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/portal" element={<StudentPortal />} />
-          <Route path="/admin" element={<AdminApp />} />
+          <Route path="/admin" element={<AdminApp />}>
+            <Route index element={<Dashboard />} />
+            <Route path="coding/platforms" element={<Platforms />} />
+            <Route path="coding/students" element={<CodingStudents />} />
+            <Route path="coding/practice" element={<Practice />} />
+            <Route path="coding/projects" element={<CodingProjects />} />
+            <Route path="coding/amcat" element={<Amcat />} />
+            <Route path="academics/problems" element={<LeetCodeProblems />} />
+            <Route path="academics/bos" element={<BOSPage />} />
+            <Route path="academics/bos/:bosId" element={<BOSPage />} />
+            <Route path="academics/faculties" element={<Faculties />} />
+            <Route path="attendance" element={<AttendancePage />} />
+            <Route path="fees" element={<FeesPage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/admin" replace />} />
+          </Route>
           <Route path="/practice" element={<PracticePage />} />
           <Route path="/projects" element={<ProjectHub />} />
           <Route path="/:slug" element={<PublicProfile />} />

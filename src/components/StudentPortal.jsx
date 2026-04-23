@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight, GitCommitHorizontal, Flame, GitPullRequest } from 'lucide-react'
-import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, updateStudentEmail, sendOtp, verifyOtp } from '../lib/db'
+import { LogOut, Edit3, Save, X, ExternalLink, Trophy, Target, Users, TrendingUp, Award, ChevronRight, ChevronLeft, Link2, Check, Copy, GitBranch, Star, GitFork, Code2, Calendar, FolderGit2, Mail, Phone, Shield, ArrowRight, GitCommitHorizontal, Flame, GitPullRequest, ClipboardList } from 'lucide-react'
+import { getStudent, getStudentProfiles, loadAllProfiles, saveStudentUsername, deleteStudentProfile, generateProfileSlug, saveProfile, getStudentByEmail, getStudentByPhone, updateStudentPhone, updateStudentEmail, sendOtp, verifyOtp, getAmcatResultsByLeadId, getAmcatResultsByEmail } from '../lib/db'
 import { cleanPlatformUsername, fetchGitHubData, fetchGitHubContributions } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { StudentProjectDashboard } from './ProjectHub'
@@ -668,6 +668,20 @@ function DashboardScreen({ student, profiles, benchmarks, profilesLoading, onEdi
   const profileMap = {}
   for (const p of profiles) profileMap[p.platform] = p
   const [copied, setCopied] = useState(false)
+  const [amcatResults, setAmcatResults] = useState({ amcat: [], svar: [] })
+  const [amcatLoading, setAmcatLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      setAmcatLoading(true)
+      let results = await getAmcatResultsByLeadId(student.lead_id)
+      if (results.amcat.length === 0 && results.svar.length === 0 && student.email) {
+        results = await getAmcatResultsByEmail(student.email)
+      }
+      setAmcatResults(results)
+      setAmcatLoading(false)
+    })()
+  }, [student.lead_id])
 
   const profileSlug = generateProfileSlug(student)
   const shareUrl = `${window.location.origin}/${profileSlug}`
@@ -812,6 +826,13 @@ function DashboardScreen({ student, profiles, benchmarks, profilesLoading, onEdi
         {profileMap.github?.stats && (
           <GitHubStats stats={profileMap.github.stats} username={profileMap.github.username} />
         )}
+
+        {/* AMCAT Assessment Results */}
+        {amcatLoading ? (
+          <SectionSkeleton lines={3} />
+        ) : (amcatResults.amcat.length > 0 || amcatResults.svar.length > 0) ? (
+          <AmcatStudentSection amcat={amcatResults.amcat} svar={amcatResults.svar} />
+        ) : null}
 
         {/* All Platform Links */}
         {profilesLoading ? (
@@ -1338,4 +1359,87 @@ export function FullSpinner() {
 export function avg(arr, key) {
   if (!arr.length) return 0
   return arr.reduce((sum, p) => sum + (p[key] || 0), 0) / arr.length
+}
+
+// ---- AMCAT Student Section ----
+
+function AmcatStudentSection({ amcat, svar }) {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-primary/10 p-4 sm:p-8 space-y-6">
+      <h3 className="text-base sm:text-lg font-bold text-primary flex items-center gap-2">
+        <ClipboardList size={20} /> AMCAT Assessment Results
+      </h3>
+
+      {amcat.length > 0 && amcat.map((r, i) => (
+        <div key={`amcat-${i}`} className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sm font-semibold text-primary">{r.assessments?.assessment_name || 'AMCAT'}</span>
+              {r.assessments?.test_date && <span className="text-xs text-primary/40 ml-2">{r.assessments.test_date}</span>}
+            </div>
+            {r.report_url && (
+              <a href={r.report_url} target="_blank" rel="noopener noreferrer"
+                className="text-xs text-ambient hover:text-dark-ambient flex items-center gap-1">
+                <ExternalLink size={12} /> View Report
+              </a>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {[
+              { label: 'Quantitative', value: r.quantitative_score },
+              { label: 'English', value: r.english_score },
+              { label: 'Logical', value: r.logical_score },
+              { label: 'Automata', value: r.automata_score },
+              { label: 'Data Structures', value: r.ds_score },
+            ].map(s => (
+              <div key={s.label} className="bg-primary/5 rounded-xl px-3 py-3 text-center">
+                <div className="text-xs text-primary/50 mb-1">{s.label}</div>
+                <div className="text-xl font-bold text-primary">{s.value != null ? s.value : '—'}</div>
+              </div>
+            ))}
+          </div>
+          {r.english_cefr_level && (
+            <div className="text-xs text-primary/50">English CEFR Level: <span className="font-semibold text-primary">{r.english_cefr_level}</span></div>
+          )}
+        </div>
+      ))}
+
+      {svar.length > 0 && svar.map((r, i) => (
+        <div key={`svar-${i}`} className="space-y-3 pt-3 border-t border-primary/10">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sm font-semibold text-primary">SVAR — Spoken English</span>
+              {r.assessments?.test_date && <span className="text-xs text-primary/40 ml-2">{r.assessments.test_date}</span>}
+            </div>
+            {r.report_url && (
+              <a href={r.report_url} target="_blank" rel="noopener noreferrer"
+                className="text-xs text-ambient hover:text-dark-ambient flex items-center gap-1">
+                <ExternalLink size={12} /> View Report
+              </a>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {[
+              { label: 'Overall Score', value: r.svar_spoken_english_score },
+              { label: 'Understanding', value: r.svar_understanding },
+              { label: 'Vocabulary', value: r.svar_vocabulary },
+              { label: 'Grammar', value: r.svar_grammar },
+              { label: 'Pronunciation', value: r.svar_pronunciation },
+              { label: 'Fluency', value: r.svar_fluency },
+              { label: 'Articulation', value: r.svar_articulation },
+              { label: 'Active Listening', value: r.svar_active_listening },
+            ].map(s => (
+              <div key={s.label} className="bg-ambient/10 rounded-xl px-3 py-3 text-center">
+                <div className="text-xs text-primary/50 mb-1">{s.label}</div>
+                <div className="text-xl font-bold text-primary">{s.value != null ? s.value : '—'}</div>
+              </div>
+            ))}
+          </div>
+          {r.svar_spoken_english_cefr_level && (
+            <div className="text-xs text-primary/50">Spoken English CEFR Level: <span className="font-semibold text-primary">{r.svar_spoken_english_cefr_level}</span></div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 }

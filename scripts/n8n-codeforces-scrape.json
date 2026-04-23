@@ -1,0 +1,147 @@
+{
+  "name": "Codeforces HTML Scrape Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4",
+      "name": "Daily Midnight",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://ifkkhwumimawacqaujop.supabase.co/rest/v1/coding_profiles",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "lead_id,username" },
+            { "name": "platform", "value": "eq.codeforces" },
+            { "name": "username", "value": "not.is.null" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4OTE3NTksImV4cCI6MjA4NjQ2Nzc1OX0.rmPKoWFi1iJLHyb1ozHgqI75t51alDwTqZZGcnBZu1I" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4OTE3NTksImV4cCI6MjA4NjQ2Nzc1OX0.rmPKoWFi1iJLHyb1ozHgqI75t51alDwTqZZGcnBZu1I" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e5f6g7h8",
+      "name": "Get CF Profiles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://codeforces.com/profile/{{ $json.username }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 3000
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+          ]
+        }
+      },
+      "id": "i9j0k1l2",
+      "name": "Scrape Profile Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $json.data || '';\nconst lead_id = $('Get CF Profiles').item.json.lead_id;\nconst username = $('Get CF Profiles').item.json.username;\n\nfunction extract(html, regex, group) {\n  group = group || 1;\n  const m = html.match(regex);\n  return m ? m[group].trim() : null;\n}\n\nfunction extractNum(str) {\n  if (!str) return 0;\n  const m = str.match(/(\\d+)/);\n  return m ? parseInt(m[1]) : 0;\n}\n\nconst currentRating = extractNum(extract(html, /Contest rating:<\\/li>\\s*<li[^>]*><span[^>]*>(\\d+)<\\/span>/));\nconst maxRating = extractNum(extract(html, /\\(max\\.\\s*<span[^>]*>[^,]*,\\s*(\\d+)/));\nconst rank = extract(html, /class=\"user-rank\">\\s*<span[^>]*>([^<]+)<\\/span>/) || '';\n\nconst counterValues = [];\nconst counterDescs = [];\nconst valRegex = /_UserActivityFrame_counterValue\">([^<]+)<\\/div>/g;\nconst descRegex = /_UserActivityFrame_counterDescription\">\\s*([^<]+?)\\s*<\\/div>/g;\nlet m;\nwhile ((m = valRegex.exec(html)) !== null) counterValues.push(m[1].trim());\nwhile ((m = descRegex.exec(html)) !== null) counterDescs.push(m[1].trim());\n\nconst activity = {};\nfor (let i = 0; i < counterValues.length && i < counterDescs.length; i++) {\n  const desc = counterDescs[i].toLowerCase();\n  const val = counterValues[i];\n  if (desc.indexOf('all time') >= 0) activity.problems_all_time = extractNum(val);\n  else if (desc.indexOf('last year') >= 0 && desc.indexOf('solved') >= 0) activity.problems_last_year = extractNum(val);\n  else if (desc.indexOf('last month') >= 0 && desc.indexOf('solved') >= 0) activity.problems_last_month = extractNum(val);\n  else if (desc.indexOf('row max') >= 0) activity.streak_max = extractNum(val);\n  else if (desc.indexOf('row') >= 0 && desc.indexOf('last year') >= 0) activity.streak_last_year = extractNum(val);\n  else if (desc.indexOf('row') >= 0 && desc.indexOf('last month') >= 0) activity.streak_last_month = extractNum(val);\n}\n\nconst contribution = extractNum(extract(html, /Contribution:<\\/span>\\s*<span[^>]*>([^<]+)<\\/span>/));\nconst friendOf = extractNum(extract(html, /Friend of:\\s*<span[^>]*>(\\d+)/));\nvar avatar = extract(html, /class=\"title-photo\"[^>]*>\\s*<img[^>]*src=\"([^\"]+)\"/) || '';\nif (avatar.indexOf('//') === 0) avatar = 'https:' + avatar;\n\nreturn {\n  json: {\n    lead_id: lead_id,\n    raw_json: {\n      user: {\n        handle: username,\n        rating: currentRating || null,\n        maxRating: maxRating || null,\n        rank: rank || null,\n        avatar: avatar,\n        contribution: contribution || 0,\n        friendOfCount: friendOf || 0\n      },\n      activity: activity,\n      submissions: [],\n      ratingHistory: []\n    },\n    fetched_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "m3n4o5p6",
+      "name": "Parse HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://ifkkhwumimawacqaujop.supabase.co/rest/v1/coding_profiles?lead_id=eq.{{ $json.lead_id }}&platform=eq.codeforces",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDg5MTc1OSwiZXhwIjoyMDg2NDY3NzU5fQ.BB3cqEO73Oot2ovkPRZ8l3eTxnq7ltJB1PtMmbh98RQ" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlma2tod3VtaW1hd2FjcWF1am9wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDg5MTc1OSwiZXhwIjoyMDg2NDY3NzU5fQ.BB3cqEO73Oot2ovkPRZ8l3eTxnq7ltJB1PtMmbh98RQ" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ raw_json: $json.raw_json, fetched_at: $json.fetched_at }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "id": "q7r8s9t0",
+      "name": "Update Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Daily Midnight": {
+      "main": [
+        [{ "node": "Get CF Profiles", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get CF Profiles": {
+      "main": [
+        [{ "node": "Scrape Profile Page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Scrape Profile Page": {
+      "main": [
+        [{ "node": "Parse HTML", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse HTML": {
+      "main": [
+        [{ "node": "Update Supabase", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
