@@ -1,7 +1,14 @@
 @import "tailwindcss";
 
+@theme {
+  --color-primary: #0D1E56;
+  --color-ambient: #3BC3E2;
+  --color-dark-ambient: #22ACD1;
+  --color-danger: #EF4444;
+}
+
 :root {
-  --font-be-vietnam-pro: 'Be Vietnam Pro', sans-serif;
+  --font-nunito-sans: 'Nunito Sans', sans-serif;
 
   /* Brand Colors */
   --color-primary: #0D1E56;
@@ -22,7 +29,7 @@
 }
 
 body {
-  font-family: var(--font-be-vietnam-pro);
+  font-family: var(--font-nunito-sans);
   background: var(--color-bg);
   color: var(--color-text-primary);
 }

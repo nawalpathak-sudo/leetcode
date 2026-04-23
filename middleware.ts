@@ -74,13 +74,8 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Portal routes — check for student session
+  // Portal routes — portal handles its own auth (login/signup screen)
   if (pathname.startsWith('/portal')) {
-    const session = request.cookies.get('alta_student_session')
-    if (!session?.value) {
-      return NextResponse.redirect(new URL('/', request.url))
-    }
-    // Student session validation similar to admin
     return NextResponse.next()
   }
 

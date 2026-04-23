@@ -1,16 +1,16 @@
 import type { Metadata } from 'next'
-import { Be_Vietnam_Pro } from 'next/font/google'
+import { Nunito_Sans } from 'next/font/google'
 import './globals.css'
 
-const beVietnamPro = Be_Vietnam_Pro({
+const nunitoSans = Nunito_Sans({
   subsets: ['latin'],
-  weight: ['300', '400', '500', '600', '700'],
-  variable: '--font-be-vietnam-pro',
+  weight: ['300', '400', '500', '600', '700', '800', '900'],
+  variable: '--font-nunito-sans',
 })
 
 export const metadata: Metadata = {
-  title: 'ALTA Experience Center',
-  description: 'ALTA School of Technology — Experience Center',
+  title: 'AlgoArena | ALTA School of Technology',
+  description: 'AlgoArena — Coding leaderboard & student portal by ALTA School of Technology',
   icons: { icon: '/favicon.png', apple: '/alta-icon.png' },
   openGraph: { images: ['/alta-logo-dark.png'] },
 }
@@ -21,7 +21,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={nunitoSans.variable}>
       <head>
         {/* Google Tag Manager */}
         <script
@@ -34,7 +34,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${beVietnamPro.variable} font-sans antialiased`}>
+      <body className={`${nunitoSans.variable} font-sans antialiased`}>
         {/* GTM noscript */}
         <noscript>
           <iframe

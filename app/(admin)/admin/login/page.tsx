@@ -65,7 +65,7 @@ export default function AdminLoginPage() {
         <div className="text-center mb-8">
           <img src="/alta-icon.png" alt="ALTA" className="h-12 mx-auto mb-4" />
           <h1 className="text-2xl font-semibold" style={{ color: 'var(--color-primary)' }}>
-            Experience Center
+            AlgoArena
           </h1>
           <p style={{ color: 'var(--color-text-secondary)' }}>Admin Login</p>
         </div>

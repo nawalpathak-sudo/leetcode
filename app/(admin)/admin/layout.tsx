@@ -79,6 +79,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     if (saved) setCollapsed(JSON.parse(saved))
   }, [])
 
+  // Login page gets no sidebar/topbar
+  if (pathname === '/admin/login') {
+    return <>{children}</>
+  }
+
   function toggleGroup(label: string) {
     const next = { ...collapsed, [label]: !collapsed[label] }
     setCollapsed(next)
@@ -107,7 +112,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <div className="h-16 flex items-center px-5 border-b" style={{ borderColor: 'var(--color-border)' }}>
           <img src="/alta-icon.png" alt="ALTA" className="h-8" />
           <span className="ml-3 text-sm font-semibold" style={{ color: 'var(--color-primary)' }}>
-            Experience Center
+            AlgoArena
           </span>
         </div>
 
